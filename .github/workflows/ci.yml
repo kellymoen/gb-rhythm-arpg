@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    env:
+      GBDK_HOME: ${{ github.workspace }}/../gbdk
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Install GBDK-2020 4.5.0
+        run: |
+          curl -fsSL https://github.com/gbdk-2020/gbdk-2020/releases/download/4.5.0/gbdk-linux64.tar.gz \
+            | tar xz -C "$(dirname "$GBDK_HOME")"
+      - name: Build ROMs
+        run: |
+          make
+          make DMG=1
+          make DEBUG=1
+      - name: Test
+        run: make test HOST_CC=gcc
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: roms
+          path: |
+            build/*.gb
+            build/*.gbc
+            build/*_actual.png

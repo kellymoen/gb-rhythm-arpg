@@ -1,0 +1,20 @@
+# Feel parameters (ADR 0004). Integers only; each becomes a field `<table>_<key>` of `tuning_t`.
+# DEBUG=1 builds can change these live from the debug menu.
+
+[timing]
+perfect_window = 3   # +/- frames around a step slot that grade PERFECT
+good_window = 6      # +/- frames that grade GOOD; beyond is OFFBEAT
+steps_per_beat = 2   # step slots per beat (2 = 8th notes)
+latency_offset = 0   # frames subtracted from input time before grading
+
+[input]
+dodge_grace = 2      # max frames between A and B that still count as A+B
+
+[combat]
+lunge_px = 12        # soft-lock lunge distance
+
+[feedback]
+palette_pulse = 1    # 1 = on
+hud_metronome = 1
+hit_flash = 1
+grade_popups = 1

@@ -1,0 +1,123 @@
+# Game Boy Rhythm Action RPG — Architecture & Vertical-Slice Plan
+
+## Context
+Empty project at `/Users/kellymoen/GameboyGame`. Goal: an isometric action RPG for Game Boy with
+8-way movement and rhythm-based combo melee (Dragoon Additions + Rez beat-lock + Bayonetta combo
+strings). The user authors all final art (Aseprite, iPad as tablet) and music (Logic Pro); Claude
+provides placeholders that are replaced by overwriting source files — nothing generated is hand-edited.
+**Go/no-go:** the vertical slice exists to prove combat feel on real hardware. If it doesn't feel
+good, the prototype is abandoned (and retried on a more powerful platform). So: feel-first ordering.
+
+## Decisions (agreed in grilling)
+**Platform**
+- Dual-mode ROM (CGB-compatible header 0x80). DMG sets every budget; CGB adds palettes only (same
+  2bpp tiles + per-tile CGB palette attributes). Never use double speed / HDMA / VRAM-bank tricks.
+  → CPU budget is identical on both, so the user's **Game Boy Color** tests the real perf budget;
+  `make DMG=1` builds a DMG-only header to check greyscale/DMG-mode on the same GBC. User will buy
+  a flashcart (EZ-Flash Junior or EverDrive GB X7). MBC5 + battery SRAM.
+- GBDK-2020 4.5.0 (native arm64), C, our own engine; ASM only for profiled hot paths.
+- Frame policy: input sampling, beat clock and music always 60 Hz in VBlank ISR; logic/render target
+  60 fps, may degrade to 30 without affecting timing accuracy.
+
+**World / rendering**
+- True 2:1 isometric, flat floors, no walkable height. Back walls only; props block, never cover.
+- Screen-aligned 8-way D-pad; world position fixed-point in world coords, projected to screen.
+- 8 facings: 5 drawn + 3 mirrored.
+- Arena: BG up to 256×256, camera follows player, no tile streaming (streaming is a field-phase task).
+- Maps: Tiled isometric, 32×16 diamonds, object layer (spawns/triggers/camera bounds). Converter bakes
+  to 8×8 tiles + dedup, collision from tile properties, prints `171/180 tiles`, fails over budget.
+- Sprites: 8×16 OBJ mode. Player ≤24×32 (6 OBJ, 3/line), one streamed frame per VBlank,
+  double-buffered tile slots. Enemies 16×24/16×32, ≤4 at once, 1–2 attack tokens. OAM rotation
+  flicker as safety net only. Bosses (later) as BG layer. All in one `budgets.h` the converters check.
+- Depth: per-frame insertion sort of entities by iso depth into shadow OAM; OAM DMA in VBlank.
+
+**Combat**
+- Music-locked beat grid. Strings = A/B sequences with rests, quantized to 8th-note subdivisions,
+  plus direction+button variants. A = light, B = heavy, A+B = dodge (2-frame grace).
+- Grades: Perfect ±3f, Good ±6f, else off-beat (still works, weaker). Latency offset setting.
+  **Perfect dodge only** → slow-mo state (enemies update at reduced rate; music continues).
+- Enemies telegraph on beat (wind-up beat N, strike beat N+k).
+- Soft lock-on: attacks turn toward nearest enemy in held direction / last target, tunable lunge.
+- Animation: combat anims beat-relative (Aseprite tag user data `dur=1/8 hit=2`); walk/run/idle cycles
+  also beat-relative (steps/bobs land on beats) while movement speed/control stays free.
+- Beat feedback (each toggleable): subtle palette pulse on downbeat, 8px window-HUD metronome,
+  hit flash/shake/hitstop, grade popups. User will experiment with more juice.
+- All timing/feel values are runtime parameters (`data/tuning.toml`), tunable live in a debug-build
+  in-ROM menu (Select+Start) that can dump values for copying back.
+
+**Audio**
+- Logic Pro → exported `.mid` → our Python converter → **our own lightweight sound driver**.
+  Logic convention: mono tracks named `P1`, `P2`, `WAVE`, `NOISE` (+ optional `HITS`); program change =
+  instrument from `assets/music/instruments.toml` (duty, envelope, wave shape, noise preset); CCs for
+  duty/volume; pitch bend + vibrato supported. Audition in Logic via RetroPlug (real GB emu AU) or PAPU.
+- Clock: VBlank 60 Hz; beat clock = fixed-point accumulator from the MIDI tempo map (any BPM, tempo
+  changes, events ±8 ms). Driver exports `beat`, `phase`, and frames-to-nearest-subdivision.
+- SFX: per-effect channel + priority stealing, music resumes. Rez-style musical hits: combo hits play
+  the song's hit instrument at a pitch from the song's `HITS` track pitch set, quantized to the beat.
+- Fallback if the driver becomes a time sink: Midi2Uge → hUGETracker → hUGEDriver patched to export row.
+
+**Asset contract (replaceability)**
+- Sprites: one `.aseprite` per character; tags `<action>_<facing>` (5 facings drawn); tag user data for
+  beat duration / hit frame; slices for pivot (feet), hitbox, hurtbox; layers/tags map to palettes from
+  `assets/palettes.aseprite` (4 shades each → DMG shade + CGB palette).
+- Build runs `aseprite -b` to export sheet PNG + JSON; the converters consume only PNG+JSON, so they're
+  testable without Aseprite. Converters validate and fail with readable errors
+  (`walk_ne frame 3: 5 colours in tile (8,16)`).
+- Placeholders are generated by Aseprite Lua scripts with exactly the real structure (user paints over
+  them). Pre-Aseprite fallbacks (font, HUD) generated as indexed PNG by Python.
+- Gameplay data: `data/combos.toml`, `enemies.toml`, `tuning.toml` → generated C tables. Combo strings
+  carry an `unlock` field (only RPG-system data shape designed now).
+
+**Deferred past the slice:** stats, levels, inventory, equipment, dialogue, saves, overworld, field
+streaming, field combat, bosses, desktop "combat lab" (SDL front end over the same portable core; build
+only if ROM iteration proves too slow after M2).
+
+## Architecture / repo layout
+```
+GameboyGame/
+  Makefile              # GBDK lcc, autobank (MBC5), asset rules, `test`, `DMG=1`, `DEBUG=1`
+  CLAUDE.md CONTEXT.md  # agent guide + domain glossary (Beat, Subdivision, Step, String, Grade, Token…)
+  docs/adr/             # one ADR per major decision above
+  src/core/             # portable C99, no GBDK headers: beat.c (clock, grading), combo.c (string
+                        #   matcher state machine), iso.c (fixed-point projection), collide.c, tuning.h
+  src/gb/               # platform: main.c, isr.c, input.c, oam.c (metasprite + depth sort + flicker),
+                        #   bg.c (map load, camera), anim.c (beat-relative), vram_stream.c, hud.c,
+                        #   fx.c (pulse/shake/hitstop), debugmenu.c
+  src/audio/            # driver.c (event streams, beat clock), sfx.c, hits.c
+  src/scenes/           # rhythmtest.c, combatflat.c, arena.c
+  assets/{sprites,tiles,maps,music,sfx}/ + palettes.aseprite
+  data/*.toml
+  tools/                # Python (uv): sprite_conv, map_conv (Tiled iso → 8×8), midi_conv, data_conv,
+                        #   budget; tools/aseprite/*.lua placeholder generators
+  tests/host/           # clang unit tests of src/core
+  tests/tools/          # pytest for converters
+  tests/rom/            # headless mGBA smoke tests (screenshot compare)
+  build/                # gitignored; build/gen/ holds generated C
+```
+Repo: git + private GitHub repo `gb-rhythm-arpg` (gh authed as kellymoen; name changeable). `.logicx`
+projects live outside the repo; only exported `.mid` committed. GitHub Actions: build ROM + host tests
++ pytest on push.
+
+## Milestones (feel-first)
+- **M0 Toolchain & skeleton:** git init + GitHub remote; install GBDK-2020 4.5.0 (GBDK_HOME outside
+  repo), `brew install uv mgba` + `--cask sameboy temurin` (Emulicious needs a JDK); user installs
+  VS Code + Emulicious Debugger extension, builds Aseprite from source, installs RetroPlug/PAPU. Makefile,
+  hello-world ROM, host test harness, pytest, CI, CLAUDE.md/CONTEXT.md/ADRs.
+- **M1 Beat:** MIDI converter + instruments.toml + sound driver + beat clock; placeholder 128 BPM MIDI
+  (generated with Python `mido`); rhythm-test scene: HUD metronome, press A → grade popup, palette pulse,
+  latency offset in debug menu. **First flashcart test of latency/feel.**
+- **M2 Combos:** combo matcher + 3 strings from combos.toml, A+B dodge + perfect-dodge slow-mo, player
+  placeholder (Aseprite Lua, 5 facings + mirror), beat-relative anims, VRAM frame streaming, SFX
+  stealing + musical hits — on a flat background.
+- **M3 Arena:** Tiled iso map converter + budget report, 256×256 arena + camera, 8-way movement +
+  collision, depth sort, one enemy type with on-beat telegraphs + attack tokens, soft lock + lunge, damage.
+- **M4 Juice & verdict:** shake/hitstop/flash, full tuning menu + dump, budget reports, DMG-mode pass;
+  user playtests on GBC hardware → go/no-go.
+
+## Verification
+- Every milestone: `make` (ROM) + `make test` (host clang unit tests for beat clock, grading, combo
+  matcher, iso math, collision; pytest for each converter incl. failure messages) green, also in CI.
+- `tests/rom`: mGBA headless boots ROM N frames, compares screenshots of each scene.
+- Manual: run in SameBoy (accuracy) and Emulicious (debug); from M1 on, flashcart on the user's GBC,
+  both CGB and `DMG=1` builds. Replaceability check: overwrite a placeholder `.aseprite` / `.mid`,
+  `make`, confirm it appears in-game with no code change.
