@@ -3,6 +3,8 @@
 GBDK_HOME ?= $(HOME)/opt/gbdk
 LCC       := $(GBDK_HOME)/bin/lcc
 UV        ?= uv
+ASEPRITE  ?= $(or $(shell command -v aseprite),$(HOME)/Applications/Aseprite.app/Contents/MacOS/aseprite)
+EMULICIOUS ?= $(HOME)/opt/emulicious/Emulicious.jar
 PYTOOLS   := PYTHONPATH=tools $(UV) run --quiet python -m
 
 NAME  := beatarpg
@@ -37,7 +39,7 @@ GEN_SRC := $(GEN)/tuning.c
 GEN_HDR := $(GEN)/tuning.h
 OBJS    := $(patsubst %.c,$(OBJ)/%.o,$(SRC)) $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))
 
-.PHONY: all test test-host test-tools test-rom run clean
+.PHONY: all test test-host test-tools test-rom run emu clean
 all: $(ROM)
 
 $(ROM): $(OBJS)
@@ -80,6 +82,10 @@ test-rom:
 
 run: $(ROM)
 	open -a SameBoy $(ROM)
+
+# Emulicious with debugger; pair with DEBUG=1 for C source-level debugging.
+emu: $(ROM)
+	java -jar $(EMULICIOUS) $(ROM) &
 
 clean:
 	rm -rf build
