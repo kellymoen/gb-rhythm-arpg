@@ -1,0 +1,82 @@
+# Instruments for every song (ADR 0005).
+#
+# [[instrument]] is picked by a MIDI program change on the P1, P2, WAVE and HITS tracks.
+#   program   MIDI program number 0-127 (Logic's "Program" field). Program 0 is used if a track has
+#             no program change before its first note.
+#   kind      "pulse" (P1, P2, HITS) or "wave" (WAVE)
+#   duty      pulse only: 0 = 12.5%, 1 = 25%, 2 = 50%, 3 = 75%  (CC12 changes it mid-song)
+#   env_pace  0 = hold the note's volume, 1-7 = fade speed (1 fastest)
+#   env_dir   "down" (fade out) or "up" (swell)
+#   wave      wave only: 32 hex digits, one 4-bit sample each
+#
+# [[drum]] is picked by the MIDI note number on the NOISE track (drum-map style).
+#   note      MIDI note number (GM: 36 kick, 38 snare, 42 closed hat, 46 open hat, 49 crash)
+#   shift     0-13, higher = lower pitch     width  15 (noisy) or 7 (metallic/tonal)
+#   divisor   0-7                            env_pace / env_dir as above; drums must decay (pace 1-7)
+
+[[instrument]]
+name = "square_lead"
+program = 0
+kind = "pulse"
+duty = 2
+env_pace = 3
+env_dir = "down"
+
+[[instrument]]
+name = "thin_stab"
+program = 1
+kind = "pulse"
+duty = 0
+env_pace = 1
+env_dir = "down"
+
+[[instrument]]
+name = "hit_bell"
+program = 2
+kind = "pulse"
+duty = 1
+env_pace = 1
+env_dir = "down"
+
+[[instrument]]
+name = "triangle_bass"
+program = 0
+kind = "wave"
+wave = "0123456789ABCDEFFEDCBA9876543210"
+env_pace = 0
+
+[[drum]]
+name = "kick"
+note = 36
+shift = 6
+width = 15
+divisor = 6
+env_pace = 1
+env_dir = "down"
+
+[[drum]]
+name = "snare"
+note = 38
+shift = 3
+width = 15
+divisor = 1
+env_pace = 2
+env_dir = "down"
+
+[[drum]]
+name = "hat_closed"
+note = 42
+shift = 1
+width = 15
+divisor = 0
+env_pace = 1
+env_dir = "down"
+
+[[drum]]
+name = "hat_open"
+note = 46
+shift = 1
+width = 15
+divisor = 0
+env_pace = 3
+env_dir = "down"

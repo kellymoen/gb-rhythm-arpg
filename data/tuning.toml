@@ -14,7 +14,8 @@ dodge_grace = 2      # max frames between A and B that still count as A+B
 lunge_px = 12        # soft-lock lunge distance
 
 [feedback]
-palette_pulse = 1    # 1 = on
-hud_metronome = 1
+palette_pulse = 1    # 0 = off, 1 = bar downbeats, 2 = every beat
+hud_metronome = 1    # 1 = on (switches below too)
 hit_flash = 1
 grade_popups = 1
+musical_hits = 1     # A/B presses play the song's hit instrument

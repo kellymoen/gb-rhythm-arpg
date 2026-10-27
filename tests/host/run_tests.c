@@ -5,11 +5,19 @@ int test_failures = 0;
 void test_iso_project(void);
 void test_iso_depth(void);
 void test_tuning_defaults(void);
+void test_beat_clock_step(void);
+void test_beat_judge_grades(void);
+void test_beat_judge_latency_and_subdivision(void);
+void test_beat_ticks_until_slot(void);
 
 static void (*const tests[])(void) = {
     test_iso_project,
     test_iso_depth,
     test_tuning_defaults,
+    test_beat_clock_step,
+    test_beat_judge_grades,
+    test_beat_judge_latency_and_subdivision,
+    test_beat_ticks_until_slot,
 };
 
 int main(void)

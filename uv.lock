@@ -6,19 +6,25 @@ requires-python = ">=3.12"
 name = "beatarpg-tools"
 version = "0.1.0"
 source = { virtual = "." }
+dependencies = [
+    { name = "mido" },
+    { name = "pillow" },
+]
 
 [package.dev-dependencies]
 dev = [
-    { name = "pillow" },
     { name = "pyboy" },
     { name = "pytest" },
 ]
 
 [package.metadata]
+requires-dist = [
+    { name = "mido", specifier = ">=1.3.3" },
+    { name = "pillow", specifier = ">=13.0.0" },
+]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "pillow", specifier = ">=13.0.0" },
     { name = "pyboy", specifier = ">=2.8.1" },
     { name = "pytest", specifier = ">=8" },
 ]
@@ -39,6 +45,18 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/01/e1/2069291243c926a2ff1cd706c7f3eeb9b62144bf60f77c9fb9ff2fb26bd3/iniconfig-2.3.1.tar.gz", hash = "sha256:67f4b9c50da0dedf52af349e7749a80a9057a5031199791b906c3bb3ae878960", size = 21209, upload-time = "2026-10-06T22:48:38.076Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/56/43/4ca9e49d27a1fcf6bece6f6aec0ea46bb9112489b93d4b688fb415457bdb/iniconfig-2.3.1-py3-none-any.whl", hash = "sha256:9121e2c1fdb355232495be3194c8dfe87ccc2d5dee45947b78e68f499790d7a7", size = 7552, upload-time = "2026-10-06T22:48:36.959Z" },
+]
+
+[[package]]
+name = "mido"
+version = "1.3.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/23/14/cfda3fe61ce4c0f50a9f707ae02b46cb53211732b2cd4522bf06272848f4/mido-1.3.3.tar.gz", hash = "sha256:1aecb30b7f282404f17e43768cbf74a6a31bf22b3b783bdd117a1ce9d22cb74c", size = 124288, upload-time = "2024-10-25T15:05:21.847Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/fd/28/45deb15c11859d2f10702b32e71de9328a9fa494f989626916db39a9617f/mido-1.3.3-py3-none-any.whl", hash = "sha256:01033c9b10b049e4436fca2762194ca839b09a4334091dd3c34e7f4ae674fd8a", size = 54614, upload-time = "2024-10-25T15:05:20.349Z" },
 ]
 
 [[package]]

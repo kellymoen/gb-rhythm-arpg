@@ -16,5 +16,28 @@ Isometric rhythm-combat action RPG for Game Boy / Game Boy Color. See `CLAUDE.md
 4. **Flashcart** — EZ-Flash Junior or EverDrive GB X7 for testing on your Game Boy Color.
 
 ## Composing in Logic Pro
-Use four monophonic tracks named `P1`, `P2`, `WAVE`, `NOISE` (plus an optional `HITS` track listing the
-pitches combo hits may use). Export MIDI into `assets/music/`. Full convention: `docs/adr/0005-*`.
+Export each song as a MIDI file into `assets/music/<song_name>.mid` (lower_snake_case), then run `make`. To hear
+it exactly as the Game Boy plays it, run `make listen` (writes and opens `build/listen.wav`). If something can't be
+played, the build stops with a message naming the track, bar and beat.
+
+**Tracks** (names must match; any other track with notes is an error):
+
+| Track   | Plays on | Range | Notes |
+|---------|----------|-------|-------|
+| `P1`    | pulse 1  | C2–B7 | monophonic |
+| `P2`    | pulse 2  | C2–B7 | monophonic; combo hits briefly take this channel, so give it the part that can drop out |
+| `WAVE`  | wave     | C1–B6 | monophonic; output volume has 3 steps (velocity ≥ 96 → 100%, ≥ 43 → 50%, else 25%) |
+| `NOISE` | noise    | —     | drum map: each MIDI note picks a `[[drum]]`; note lengths are ignored (drums decay) |
+| `HITS`  | (not played) | C2–B7 | the pitches combo hits may use, up to 16; its program change picks the hit sound |
+
+**Per-track controls:** program change = instrument from `assets/music/instruments.toml` (program 0 if none);
+velocity = volume; **CC12** = pulse duty (0–31 12.5%, 32–63 25%, 64–95 50%, 96–127 75%); **CC1** (mod wheel) =
+vibrato depth; **pitch bend** = ±2 semitones. Other CCs are ignored. Two notes starting together on one track is
+an error (the channels are monophonic).
+
+**Song structure:** tempo changes and the time signature come from the MIDI file. Add a marker named `loop`
+where the loop should restart (default: the start) and one named `end` where the song ends (default: the end of
+the bar containing the last note).
+
+Audition in Logic with RetroPlug (a real emulated Game Boy as a plugin) or PAPU, using one instance per track
+with matching settings.
