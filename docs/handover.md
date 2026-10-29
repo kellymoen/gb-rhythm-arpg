@@ -18,6 +18,9 @@ Rewritten by the orchestrator at the end of every session, for the next one. Rea
   `~/.claude/plans/you-are-an-orchestrator-snoopy-iverson.md`.
 
 ## Not verified / known gaps
+- In the lab, unsetting a *first* SFX step's `duty` or `noise_*` key makes the converter apply its
+  first-step default rather than KEEP, so WRAM and the rebuilt ROM differ for that one case.
+  `sfx.py` could mark implicit defaults as `absent` (the lab treats any missing key as absent).
 - `BUDGET_STREAM_BYTES` is a guess until the sprite runtime measures VRAM copy cost.
 
 ## Gotchas
