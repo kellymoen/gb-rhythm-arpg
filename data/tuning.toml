@@ -16,6 +16,8 @@ dodge_grace = 2      # [0..6] max frames between A and B that still count as A+B
 lunge_px = 24        # [0..48] cap on any attack's lunge (attacks set their own in data/combos.toml)
 string_grace = 1     # [0..4] unwritten empty step slots before a combo string breaks
 offbeat_damage_shift = 1  # [0..4] OFFBEAT steps deal damage >> this (1 = half)
+lock_range_px = 40   # [0..96] soft lock: an attack turns and lunges toward a target this close (screen px, each axis)
+hit_depth_px = 12    # [0..32] a hitbox only connects with targets within this many screen-y px of the attacker's feet
 
 [hitstop]
 perfect_ticks = 8    # [0..24] freeze on a PERFECT hit, in song ticks
@@ -35,3 +37,17 @@ grade_popups = 1     # [0..1]
 musical_hits = 1     # [0..1] on-beat A/B presses play the song's hit instrument
 musical_hit_frames = 10   # [1..30] how long a musical hit holds P2 (frames: a sound length, not combat timing)
 musical_hit_volume = 15   # [1..15] musical hit volume
+popup_ticks = 36     # [8..96] how long a grade popup (and the dummy's strike mark) shows, in song ticks
+
+# PROVISIONAL (M2 combat scene). Movement is per frame: it is not combat timing.
+[player]
+walk_speed = 16      # [4..48] walk speed in 1/16 px per frame (16 = 1 px; diagonals move 3/4 of it per axis)
+dodge_px = 16        # [0..48] how far a dodge dashes: in the held direction, else straight back
+
+# PROVISIONAL training dummy (M2). Real enemies, telegraphs and attack tokens are M3.
+[dummy]
+attack_every_beats = 16   # [0..64] beats from one "!" telegraph to the next; 0 = the dummy never attacks
+telegraph_beats = 2  # [1..8] beats from the telegraph to the strike (which lands on that beat)
+range_px = 24        # [0..64] the strike hurts a player whose feet are this close (screen px; y counts double)
+solid_w = 9          # [0..24] half-width of the dummy's footprint, which the player cannot walk into (px)
+solid_h = 5          # [0..16] half-height of that footprint (px)
