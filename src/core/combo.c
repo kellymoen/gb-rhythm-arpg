@@ -34,7 +34,7 @@ static void go_idle(combo_t *c)
     c->run.step = 0;
 }
 
-void combo_reset_with(combo_t *c, const combo_string_t *strings, uint8_t count) COMBO_BANKED
+void combo_reset_with(combo_t *c, const combo_string_t *strings, uint8_t count) CORE_BANKED
 {
     c->strings = strings;
     c->count = count;
@@ -45,7 +45,7 @@ void combo_reset_with(combo_t *c, const combo_string_t *strings, uint8_t count) 
     go_idle(c);
 }
 
-void combo_reset(combo_t *c) COMBO_BANKED
+void combo_reset(combo_t *c) CORE_BANKED
 {
     combo_reset_with(c, combos.strings, COMBO_STRING_COUNT);
 }
@@ -252,7 +252,7 @@ static uint8_t commit(combo_t *c, combo_event_t *out)
     return c->held_n;
 }
 
-uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[COMBO_MAX_EVENTS]) COMBO_BANKED
+uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[COMBO_MAX_EVENTS]) CORE_BANKED
 {
     uint8_t grace = (uint8_t)tuning.input_dodge_grace;
     uint8_t buttons = in->buttons & BUTTONS, n = 0;
@@ -282,14 +282,14 @@ uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[COMBO
     return n;
 }
 
-void combo_land(combo_t *c) COMBO_BANKED
+void combo_land(combo_t *c) CORE_BANKED
 {
     c->hit.ev.type = COMBO_EV_NONE;
     if (c->pending == HELD)
         land_held(c);
 }
 
-uint8_t combo_tick(combo_t *c, const beat_clock_t *now, uint8_t frame, combo_event_t out[COMBO_MAX_EVENTS]) COMBO_BANKED
+uint8_t combo_tick(combo_t *c, const beat_clock_t *now, uint8_t frame, combo_event_t out[COMBO_MAX_EVENTS]) CORE_BANKED
 {
     c->hit.ev.type = COMBO_EV_NONE;
     if (c->pending) {

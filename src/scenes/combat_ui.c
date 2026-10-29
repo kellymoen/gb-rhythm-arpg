@@ -56,9 +56,7 @@ static uint8_t jobs, name;
 
 /* COMBO_STRING_* order (data/combos.toml); others print as COMBO. Kept by hand until combos.py
  * emits display names; the check below fails the build when a string is added or removed. */
-static const char *const string_names[] = { "RUSH", "PAUSE", "CRUSH", "CRUSH LUNGE" };
-#define STRING_NAMES (sizeof string_names / sizeof string_names[0])
-typedef char string_names_match_combos_toml[STRING_NAMES == COMBO_STRING_COUNT ? 1 : -1];
+static const char *const string_names[COMBO_STRING_COUNT] = COMBO_STRING_LABELS; /* data/combos.toml */
 static const char *const other_names[] = { "BREAK", "DODGE", "PERFECT DODGE", "OUCH", "DODGED!", "" };
 
 void combat_ui_init(void) BANKED
@@ -243,7 +241,7 @@ uint8_t combat_ui_text(void) BANKED
     }
     if (jobs & JOB_NAME) {
         jobs &= (uint8_t)~JOB_NAME;
-        if (name < STRING_NAMES)
+        if (name < COMBO_STRING_COUNT)
             s = string_names[name];
         else if (name >= NAME_BREAK && name <= NAME_BLANK)
             s = other_names[name - NAME_BREAK];

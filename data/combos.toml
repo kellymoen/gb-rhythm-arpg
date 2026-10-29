@@ -16,6 +16,7 @@
 #            over one without when that direction is held.
 #   attacks  one attack name per step, "" under rests. Strings that start with the same steps must
 #            use the same attacks until they diverge (the matcher can't know which one you're playing).
+#   label    optional display name, at most 12 characters (default: the name upper-cased, _ as space)
 #   unlock   [0..255] progression level that unlocks the string (0 = from the start; not enforced yet)
 
 [[attack]]

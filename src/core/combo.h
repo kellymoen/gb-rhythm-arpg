@@ -4,6 +4,7 @@
 #include <stdint.h>
 
 #include "combos.h"
+#include "core/banked.h"
 #include "core/beat.h"
 
 /* Combo string matcher (ADR 0004). Portable: the scene feeds it judged presses and the beat clock,
@@ -111,32 +112,27 @@ typedef struct {
  *   ev.type COMBO_EV_NONE            nothing for musical hits. */
 #define combo_hit(c) ((const combo_hit_t *)&(c)->hit)
 
-#ifdef __SDCC
-#define COMBO_BANKED __banked /* the matcher lives in a switchable bank; its tables are in bank 0/RAM */
-#else
-#define COMBO_BANKED
-#endif
 
 /* Start idle, matching against the generated table (combos.strings). */
-void combo_reset(combo_t *c) COMBO_BANKED;
+void combo_reset(combo_t *c) CORE_BANKED;
 
 /* Start idle, matching against `count` (<= 8) strings at `strings`, which must be in bank 0 or RAM. */
-void combo_reset_with(combo_t *c, const combo_string_t *strings, uint8_t count) COMBO_BANKED;
+void combo_reset_with(combo_t *c, const combo_string_t *strings, uint8_t count) CORE_BANKED;
 
 /* Feed one press. Returns the number of events written to `out` (0..2: a held-back press can
  * resolve as BREAK + STEP, a dodge can end a string: BREAK + DODGE). */
-uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[COMBO_MAX_EVENTS]) COMBO_BANKED;
+uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[COMBO_MAX_EVENTS]) CORE_BANKED;
 
 /* Land a press held back for dodge_grace now, provisionally, if it has not landed yet: combo_hit()
  * then names the step it became. Costs what a landing costs (combo_tick pays it when it commits
  * otherwise), so the scene calls it when the frame has room, as early as it can. */
-void combo_land(combo_t *c) COMBO_BANKED;
+void combo_land(combo_t *c) CORE_BANKED;
 
 /* Call once per main-loop frame after the presses, with the beat clock (music_now) and the frame
  * counter read before draining the press queue: resolves held-back presses after dodge_grace and
  * breaks strings after string_grace empty slots. While a string runs it computes beat_slot_now(now),
  * the slot a press made now would be judged against; idle frames skip that. Returns the number of
  * events written (0..2). */
-uint8_t combo_tick(combo_t *c, const beat_clock_t *now, uint8_t frame, combo_event_t out[COMBO_MAX_EVENTS]) COMBO_BANKED;
+uint8_t combo_tick(combo_t *c, const beat_clock_t *now, uint8_t frame, combo_event_t out[COMBO_MAX_EVENTS]) CORE_BANKED;
 
 #endif
