@@ -14,6 +14,8 @@ emulation, SameBoy as reference — ADR 0008). Architecture decisions live in `d
   golden screenshots, sound, frame budget). `UPDATE_GOLDEN=1 make test-rom` re-records goldens — review them.
 - `make run` / `make emu` — open the ROM in SameBoy / Emulicious; `make listen` — render ROM audio to a WAV
 - `make placeholders` — write missing placeholder assets (never overwrites)
+- `make lab` — the feel lab: DEBUG ROM in PyBoy + web UI on http://localhost:8750 (`docs/lab.md`).
+  Its latency differs from SameBoy's; confirm latency with the calibration screen in SameBoy
 - `GBDK_HOME` defaults to `~/opt/gbdk`
 
 ## Layout

@@ -6,11 +6,6 @@
 #   LAB_JSON += $(GEN)/combos.lab.json
 # and giving that file a rule (it is normally a by-product of the converter that writes the table).
 
-# This file is included before `all` is defined; without this its first rule would become `make`'s default.
-ifeq ($(.DEFAULT_GOAL),)
-  .DEFAULT_GOAL := all
-endif
-
 LAB_JSON += $(GEN)/tuning.lab.json
 
 .PHONY: lab lab-descriptors

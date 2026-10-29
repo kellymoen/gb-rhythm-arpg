@@ -15,6 +15,11 @@ Isometric rhythm-combat action RPG for Game Boy / Game Boy Color. See `CLAUDE.md
    PAPU (https://socalabs.com/synths/papu/).
 4. **Flashcart** (optional) — the slice is tuned in SameBoy (ADR 0008); hardware testing comes later.
 
+## Tuning feel
+`make lab` opens the game in a window plus a web page of live sliders for every tuning value, a graph of
+how early or late your presses are, and input record/replay. **Save** writes straight back to
+`data/tuning.toml`. Details: `docs/lab.md`.
+
 ## Replacing placeholders
 Everything Claude made is named `<name>_genplaceholder.<ext>`. Open it, make it yours, and **Save As**
 `<name>.<ext>` in the same folder; the build uses yours from then on. `make` prints
