@@ -10,10 +10,37 @@
 #define TILE_UI 0x40
 #define TILE_SPRITES 0x80
 
+/* Sprite tiles (0x80-0xFF) and OAM entries, split by owner so packages never collide:
+ *   tiles 0x80-0x83  HUD metronome pips          OAM 0-7    HUD pips (hud.c)
+ *   tiles 0x84-0x87  UI sprites (popups)          OAM 8-11   UI sprites
+ *   tiles 0x88-0x8F  DEBUG timing overlay         OAM 12-15  overlay (overlay.c)
+ *   tiles 0x90-0xA7  player frame, 2 x 12 tiles   OAM 16-39  world sprites, depth-sorted (oam.c)
+ *   tiles 0xA8-0xFF  enemies / dummy / effects                (double-buffered streaming) */
+#define TILE_HUD_SPR TILE_SPRITES
+#define TILE_UI_SPR 0x84
+#define TILE_UI_SPR_COUNT 12
+#define TILE_PLAYER_SPR 0x90
+#define TILE_WORLD_SPR 0xA8
+#define TILE_OVERLAY_SPR 0x88
+#define OAM_OVERLAY 12
+#define OAM_HUD 0
+#define OAM_UI 8
+#define OAM_UI_COUNT 8
+#define OAM_WORLD 16
+#define OAM_WORLD_COUNT 24
+
 /* LCD, sprite mode and palettes for both DMG and CGB. Call with the display off. */
 void video_init(void);
 
-/* 0 = normal, 1 = one shade lighter (used by the beat pulse). */
-void video_set_brightness(uint8_t lighter);
+/* Background brightness levels (video_set_brightness). */
+enum {
+    BRIGHTNESS_NORMAL,
+    BRIGHTNESS_PULSE, /* one shade lighter: the beat pulse */
+    BRIGHTNESS_DIM    /* colours 1-3 one shade darker, colour 0 unchanged so sprites stay readable:
+                       * the slow-mo cue */
+};
+
+/* Set the background palette to a BRIGHTNESS_* level. */
+void video_set_brightness(uint8_t level);
 
 #endif

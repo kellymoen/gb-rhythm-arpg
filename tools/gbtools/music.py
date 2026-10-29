@@ -1,5 +1,10 @@
 """Convert Logic Pro MIDI exports (assets/music/*.mid) + instruments.toml into driver data (ADR 0005).
 
+    python -m gbtools.music <instruments.toml> <out_dir> <song.mid>...
+
+The Makefile passes the resolved songs (ADR 0007): `rhythmtest_genplaceholder.mid` and `rhythmtest.mid`
+are both the song `rhythmtest`.
+
 Outputs in <out_dir>: music.h (song declarations), music_common.c (note table, instruments, waves),
 and song_<name>.c per song (banked event streams). Byte layout: src/audio/song.h.
 """
@@ -12,7 +17,9 @@ from pathlib import Path
 
 import mido
 
+from gbtools.assets import asset_name
 from gbtools.errors import ConvertError
+from gbtools.names import IDENT, suggest_ident
 
 FPS = 4194304 / 70224  # Game Boy frame rate, ~59.7275 Hz
 BEAT_TICKS = 48
@@ -28,7 +35,6 @@ CC_VIBRATO, CC_DUTY = 1, 12
 CHANNELS = ["P1", "P2", "WAVE", "NOISE"]
 TRACK_NAMES = CHANNELS + ["HITS"]
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-SONG_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Sort order of events that share a tick: state changes before notes, OFF before a new NOTE.
 ORDER_LOOP, ORDER_STATE, ORDER_OFF, ORDER_NOTE, ORDER_END = range(5)
@@ -46,6 +52,11 @@ def note_freq(index: int) -> int:
 def tempo_rate(bpm: float) -> int:
     """8.8 fixed-point song ticks per frame."""
     return round(BEAT_TICKS * bpm / 60 / FPS * 256)
+
+
+def tempo_event(bpm: float) -> bytes:
+    """EV_TEMPO <rate lo> <rate hi> <bpm for display, 1-255>."""
+    return bytes([EV_TEMPO]) + tempo_rate(bpm).to_bytes(2, "little") + bytes([max(1, min(255, round(bpm)))])
 
 
 # --- instruments -------------------------------------------------------------------------------
@@ -89,7 +100,7 @@ class InstrumentSet:
 def _int(path, where, entry, key, lo, hi, default=None):
     value = entry.get(key, default)
     if value is None:
-        raise ConvertError(path, f"{where}: missing '{key}'")
+        raise ConvertError(path, f"{where}: missing '{key}'; add {key} = <{lo}-{hi}>")
     if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
         raise ConvertError(path, f"{where}: '{key}' must be an integer {lo}-{hi}, got {value!r}")
     return value
@@ -99,7 +110,7 @@ def _env(path, where, entry) -> int:
     pace = _int(path, where, entry, "env_pace", 0, 7, 0)
     direction = entry.get("env_dir", "down")
     if direction not in ("down", "up"):
-        raise ConvertError(path, f"{where}: 'env_dir' must be \"down\" or \"up\"")
+        raise ConvertError(path, f"{where}: 'env_dir' must be \"down\" or \"up\", got {direction!r}")
     return (8 if direction == "up" else 0) | pace
 
 
@@ -107,7 +118,7 @@ def load_instruments(path: Path) -> InstrumentSet:
     try:
         doc = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
-        raise ConvertError(path, f"invalid TOML: {e}") from e
+        raise ConvertError(path, f"invalid TOML: {e}; fix the syntax at that line") from e
 
     out: list[Instrument] = []
     waves: list[bytes] = []
@@ -128,9 +139,11 @@ def load_instruments(path: Path) -> InstrumentSet:
                 waves.append(data)
             ins = Instrument(name, kind, param=waves.index(data), program=program)
         else:
-            raise ConvertError(path, f"{where}: 'kind' must be \"pulse\" or \"wave\", got {kind!r}")
-        if any(o.kind == kind and o.program == program for o in out):
-            raise ConvertError(path, f"{where}: another {kind} instrument already uses program {program}")
+            raise ConvertError(path, f"{where}: 'kind' must be \"pulse\" or \"wave\", got {kind!r} (noise "
+                                     f"instruments are [[drum]] tables)")
+        if other := next((o for o in out if o.kind == kind and o.program == program), None):
+            raise ConvertError(path, f"{where}: {kind} instrument '{other.name}' already uses program {program}; "
+                                     f"give one of them another program")
         out.append(ins)
 
     for n, entry in enumerate(doc.get("drum", []), 1):
@@ -145,12 +158,14 @@ def load_instruments(path: Path) -> InstrumentSet:
             raise ConvertError(path, f"{where}: 'width' must be 15 or 7")
         nr43 = (_int(path, where, entry, "shift", 0, 13) << 4) | (8 if width == 7 else 0) \
             | _int(path, where, entry, "divisor", 0, 7)
-        if any(o.kind == "noise" and o.note == note for o in out):
-            raise ConvertError(path, f"{where}: another drum already uses note {note}")
+        if other := next((o for o in out if o.kind == "noise" and o.note == note), None):
+            raise ConvertError(path, f"{where}: drum '{other.name}' already uses note {note}; map one of them to "
+                                     f"another note")
         out.append(Instrument(name, "noise", env=env, param=nr43, note=note))
 
     if len(out) > 255:
-        raise ConvertError(path, "too many instruments (max 255)")
+        raise ConvertError(path, f"{len(out)} instruments and drums, at most 255 fit; remove "
+                                 f"{len(out) - 255} [[instrument]] or [[drum]] tables")
     return InstrumentSet(out, waves)
 
 
@@ -218,7 +233,8 @@ def _channel_events(path, tl, track, name, kind, ins: InstrumentSet) -> tuple[li
         if idx is None:
             have = ", ".join(map(str, ins.programs(kind))) or "none"
             raise ConvertError(path, f"{tl.where(name, tick)}: no {kind} instrument has program {p} "
-                                     f"in instruments.toml (defined {kind} programs: {have})")
+                                     f"in instruments.toml (defined {kind} programs: {have}); add one with "
+                                     f"program = {p}, or change the track's program in Logic")
         if idx != instr:
             instr = idx
             events.append(Event(tick, ORDER_STATE, bytes([EV_INSTR, idx])))
@@ -238,7 +254,9 @@ def _channel_events(path, tl, track, name, kind, ins: InstrumentSet) -> tuple[li
                 if drum is None:
                     have = ", ".join(note_name(n) for n in ins.drum_notes()) or "none"
                     raise ConvertError(path, f"{tl.where(name, tick)}: no drum mapped to note "
-                                             f"{note_name(msg.note)} (mapped drum notes: {have})")
+                                             f"{note_name(msg.note)} (mapped drum notes: {have}); add a [[drum]] "
+                                             f"with note = {msg.note} to instruments.toml, or move the hit to a "
+                                             f"mapped note")
                 events.append(Event(tick, ORDER_NOTE, bytes([drum, vol])))
                 continue
             set_instr(tick)
@@ -246,7 +264,8 @@ def _channel_events(path, tl, track, name, kind, ins: InstrumentSet) -> tuple[li
             index = msg.note - base
             if not 0 <= index < NOTE_COUNT:
                 raise ConvertError(path, f"{tl.where(name, tick)}: note {note_name(msg.note)} is outside "
-                                         f"the {name} range {note_name(base)}-{note_name(base + NOTE_COUNT - 1)}")
+                                         f"the {name} range {note_name(base)}-{note_name(base + NOTE_COUNT - 1)}; "
+                                         f"transpose it into that range")
             events.append(Event(tick, ORDER_NOTE, bytes([index, vol])))
             current = msg.note
         elif msg.type == "note_off" or (msg.type == "note_on" and msg.velocity == 0):
@@ -276,18 +295,19 @@ def _channel_events(path, tl, track, name, kind, ins: InstrumentSet) -> tuple[li
 
 
 def _state_at(changes, tick) -> list[bytes]:
-    """Event bytes that restore instrument/duty/bend/vibrato as they were just before `tick`."""
-    state = {}
+    """Event bytes that restore instrument/duty/bend/vibrato at the loop point as they were just before
+    `tick`. Only values the song changes after that point need restoring: every event in a loop frame
+    costs ISR time (docs/perf.md)."""
+    before: dict[str, int] = {"bend": 0, "vib": 0}  # music_play's defaults
+    after: dict[str, int] = dict(before)
     for t, key, value in changes:
         if t < tick:
-            state[key] = value
+            before[key] = value
+        after[key] = value
     out = []
-    if "instr" in state:
-        out.append(bytes([EV_INSTR, state["instr"]]))
-    if "duty" in state:
-        out.append(bytes([EV_DUTY, state["duty"]]))
-    out.append(bytes([EV_BEND, state.get("bend", 0) & 0xFF]))
-    out.append(bytes([EV_VIB, state.get("vib", 0)]))
+    for key, op in (("instr", EV_INSTR), ("duty", EV_DUTY), ("bend", EV_BEND), ("vib", EV_VIB)):
+        if key in before and before[key] != after[key]:
+            out.append(bytes([op, before[key] & 0xFF]))
     return out
 
 
@@ -306,14 +326,18 @@ def _encode(events: list[Event]) -> bytes:
 
 
 def _frame(path, tl, name, events, loop_tick, end_tick, restore: list[bytes], off_at_end: bool):
+    """Add the loop and end framing. music_play() starts with the loop pointer at the stream start, so a
+    loop at tick 0 needs no EV_LOOP; and an OFF at the end is redundant when a note starts the loop."""
     for e in events:
         if e.tick >= end_tick:
             raise ConvertError(path, f"{tl.where(name, e.tick)}: event after the song end "
                                      f"(bar {end_tick // (BEAT_TICKS * tl.beats_per_bar) + 1}); "
                                      f"move the 'end' marker or trim the region")
-    framed = [Event(loop_tick, ORDER_LOOP, bytes([EV_LOOP]))]
+    framed = [Event(loop_tick, ORDER_LOOP, bytes([EV_LOOP]))] if loop_tick > 0 else []
     framed += [Event(loop_tick, ORDER_LOOP, b) for b in restore]
     framed += events
+    if any(e.tick == loop_tick and e.order == ORDER_NOTE for e in events):
+        off_at_end = False
     if off_at_end:
         framed.append(Event(end_tick, ORDER_END, bytes([EV_OFF])))
     framed.append(Event(end_tick, ORDER_END + 1, bytes([EV_END])))
@@ -321,13 +345,14 @@ def _frame(path, tl, name, events, loop_tick, end_tick, restore: list[bytes], of
 
 
 def convert_song(path: Path, ins: InstrumentSet) -> Song:
-    name = path.stem.lower()
-    if not SONG_NAME.match(name):
-        raise ConvertError(path, f"song file name '{path.stem}' must be lower_snake_case (it becomes a C name)")
+    name = asset_name(path)
+    if not IDENT.match(name):
+        raise ConvertError(path, f"song file name '{name}' must be lower_snake_case (it becomes a C name); "
+                                 f"rename the file, e.g. {suggest_ident(name)}.mid")
     try:
         mid = mido.MidiFile(path)
     except (OSError, ValueError, EOFError) as e:
-        raise ConvertError(path, f"cannot read MIDI file: {e}") from e
+        raise ConvertError(path, f"cannot read MIDI file: {e}; export it again from Logic as a MIDI file") from e
 
     tl = _Timeline(mid.ticks_per_beat)
     tempos: list[tuple[int, float]] = []
@@ -349,7 +374,8 @@ def convert_song(path: Path, ins: InstrumentSet) -> Song:
         has_notes = any(m.type == "note_on" for m in track)
         if tname.upper() in TRACK_NAMES:
             if tname.upper() in by_name:
-                raise ConvertError(path, f"two tracks are named {tname.upper()}")
+                raise ConvertError(path, f"two tracks are named {tname.upper()}; merge them into one track or "
+                                         f"rename one in Logic before exporting")
             by_name[tname.upper()] = track
         elif has_notes:
             raise ConvertError(path, f"track '{tname or '(unnamed)'}' has notes but isn't named one of "
@@ -362,7 +388,8 @@ def convert_song(path: Path, ins: InstrumentSet) -> Song:
     loop_tick = markers.get("loop", 0)
     end_tick = markers.get("end", -(-max(last_tick, 1) // bar) * bar)
     if end_tick <= loop_tick:
-        raise ConvertError(path, "the 'end' marker must come after the 'loop' marker")
+        raise ConvertError(path, f"the 'end' marker (bar {end_tick // bar + 1}) must come after the 'loop' marker "
+                                 f"(bar {loop_tick // bar + 1}); move one of them")
 
     streams = []
     kinds = {"P1": "pulse", "P2": "pulse", "WAVE": "wave", "NOISE": "noise"}
@@ -372,10 +399,9 @@ def convert_song(path: Path, ins: InstrumentSet) -> Song:
         restore = _state_at(info["changes"], loop_tick) if ch != "NOISE" else []
         streams.append(_frame(path, tl, ch, events, loop_tick, end_tick, restore, ch != "NOISE"))
 
-    tempo_events = [Event(t, ORDER_STATE, bytes([EV_TEMPO]) + tempo_rate(bpm).to_bytes(2, "little"))
-                    for t, bpm in tempos if t > 0]
+    tempo_events = [Event(t, ORDER_STATE, tempo_event(bpm)) for t, bpm in tempos if t > 0]
     at_loop = [bpm for t, bpm in tempos if t <= loop_tick][-1]
-    loop_tempo = [bytes([EV_TEMPO]) + tempo_rate(at_loop).to_bytes(2, "little")]
+    loop_tempo = [tempo_event(at_loop)] if tempos[-1][1] != at_loop else []
     streams.append(_frame(path, tl, "tempo", tempo_events, loop_tick, end_tick, loop_tempo, False))
 
     hits: list[int] = []
@@ -387,9 +413,11 @@ def convert_song(path: Path, ins: InstrumentSet) -> Song:
         if instrs:
             hit_instrument = instrs[0]
         if len(hits) > HITS_MAX:
-            raise ConvertError(path, f"HITS track uses {len(hits)} different pitches (max {HITS_MAX})")
+            raise ConvertError(path, f"HITS track uses {len(hits)} different pitches (max {HITS_MAX}); use at most "
+                                     f"{HITS_MAX} different notes on it")
     if hit_instrument is None:
-        raise ConvertError(path, "instruments.toml needs at least one pulse instrument")
+        raise ConvertError(path, "instruments.toml needs at least one pulse instrument (it plays the hits); add "
+                                 "an [[instrument]] with kind = \"pulse\"")
 
     return Song(name, streams, tempo_rate(tempos[0][1]), round(tempos[0][1]), tl.beats_per_bar,
                 hit_instrument, hits)
@@ -439,13 +467,13 @@ def render_header(songs: list[Song]) -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: python -m gbtools.music <music_dir> <instruments.toml> <out_dir>", file=sys.stderr)
+    if len(argv) < 2:
+        print("usage: python -m gbtools.music <instruments.toml> <out_dir> <song.mid>...", file=sys.stderr)
         return 2
-    music_dir, ins_path, out_dir = map(Path, argv)
+    ins_path, out_dir = Path(argv[0]), Path(argv[1])
     try:
         ins = load_instruments(ins_path)
-        songs = [convert_song(p, ins) for p in sorted(music_dir.glob("*.mid"))]
+        songs = [convert_song(Path(p), ins) for p in argv[2:]]
     except ConvertError as e:
         print(e, file=sys.stderr)
         return 1

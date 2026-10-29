@@ -51,11 +51,30 @@ def test_sprite8x16_orders_top_then_bottom(tmp_path):
 def test_errors(tmp_path):
     p = tmp_path / "bad.png"
     indexed(12, 8).save(p)
-    with pytest.raises(ConvertError, match="width must be a multiple of 8"):
+    with pytest.raises(ConvertError, match=r"bad\.png: is 12x8; width must be a multiple of 8 and height of 8, so "
+                                           r"resize the canvas"):
         tiles.convert(p, sprite8x16=False)
     img = Image.new("RGB", (8, 8))
     for i in range(5):
         img.putpixel((i, 0), (i * 50, 0, 0))
     img.save(p)
-    with pytest.raises(ConvertError, match="has 5 colours"):
+    with pytest.raises(ConvertError, match=r"bad\.png: has 5 colours; Game Boy tiles allow 4 shades, so reduce it to 4 "
+                                           r"colours \(or save it as an indexed PNG using palette indices 0-3\)"):
         tiles.convert(p, sprite8x16=False)
+    img = indexed(8, 8, [((0, 0), 5), ((1, 0), 4)])
+    img.putpalette([255, 255, 255, 170, 170, 170, 85, 85, 85, 0, 0, 0] + [255, 0, 0] * 4)
+    img.save(p)
+    with pytest.raises(ConvertError, match=r"bad\.png: uses palette indices \[4, 5\]; only indices 0-3 \(4 shades\) are "
+                                           r"allowed, so repaint those pixels with the first four palette colours"):
+        tiles.convert(p, sprite8x16=False)
+    p.write_bytes(b"not a png")
+    with pytest.raises(ConvertError, match=r"bad\.png: cannot read PNG: .*; re-save it as a PNG"):
+        tiles.convert(p, sprite8x16=False)
+
+
+def test_banked_output_has_pragma_and_bankref():
+    header, source_c = tiles.render("ui_x", [bytes(16)], "assets/ui/x.png", banked=True)
+    assert "BANKREF_EXTERN(ui_x)" in header and "#include <gbdk/platform.h>" in header
+    assert source_c.index("#pragma bank 255") < source_c.index("BANKREF(ui_x)") < source_c.index("ui_x_tiles[]")
+    header, source_c = tiles.render("ui_x", [bytes(16)], "assets/ui/x.png")
+    assert "BANK" not in header + source_c and "pragma" not in source_c

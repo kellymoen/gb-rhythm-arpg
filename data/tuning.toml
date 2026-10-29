@@ -1,21 +1,59 @@
 # Feel parameters (ADR 0004). Integers only; each becomes a field `<table>_<key>` of `tuning_t`.
-# DEBUG=1 builds can change these live from the debug menu.
+# DEBUG=1 builds can change these live from the debug menu and the feel lab (ADR 0008).
+# Each comment starts with the allowed range `[min..max]`; the feel lab uses it for its sliders. An
+# optional `{LABEL}` after it (at most 10 characters) names the param in the DEBUG menu.
+# Combat durations are in song ticks (48 per beat), never frames, so they scale with the tempo.
 
 [timing]
-perfect_window = 3   # +/- frames around a step slot that grade PERFECT
-good_window = 6      # +/- frames that grade GOOD; beyond is OFFBEAT
-steps_per_beat = 2   # step slots per beat (2 = 8th notes)
-latency_offset = 0   # frames subtracted from input time before grading
+perfect_window = 3   # [0..10] {PERFECT} +/- frames around a step slot that grade PERFECT
+good_window = 6      # [0..20] {GOOD} +/- frames that grade GOOD; beyond is OFFBEAT
+steps_per_beat = 2   # [1..8] {STEPS/BEAT} step slots per beat (2 = 8th notes); must divide 48
+latency_offset = 0   # [-15..15] {LATENCY} frames subtracted from input time before grading
 
 [input]
-dodge_grace = 2      # max frames between A and B that still count as A+B
+dodge_grace = 2      # [0..6] {DODGE GRC} max frames between A and B that still count as A+B
 
 [combat]
-lunge_px = 12        # soft-lock lunge distance
+lunge_px = 24        # [0..48] cap on any attack's lunge (attacks set their own in data/combos.toml)
+string_grace = 1     # [0..4] {STRING GRC} unwritten empty step slots before a combo string breaks
+offbeat_damage_shift = 1  # [0..4] {OFF DAMAGE} OFFBEAT steps deal damage >> this (1 = half)
+lock_range_px = 40   # [0..96] {LOCK RANGE} soft lock: an attack turns and lunges toward a target this close (screen px, each axis)
+hit_depth_px = 12    # [0..32] {HIT DEPTH} a hitbox only connects with targets within this many screen-y px of the attacker's feet
+
+[hitstop]
+perfect_ticks = 8    # [0..24] {PERFECT} freeze on a PERFECT hit, in song ticks
+good_ticks = 5       # [0..24] {GOOD} freeze on a GOOD hit
+offbeat_ticks = 2    # [0..24] {OFFBEAT} freeze on an OFFBEAT hit
+
+[slowmo]
+beats = 2            # [0..8] how long a perfect dodge's slow-mo lasts
+enemy_divider = 2    # [1..8] {ENEMY RATE} enemies update once every this many frames during slow-mo
 
 [feedback]
-palette_pulse = 1    # 0 = off, 1 = bar downbeats, 2 = every beat
-hud_metronome = 1    # 1 = on (switches below too)
-hit_flash = 1
-grade_popups = 1
-musical_hits = 1     # A/B presses play the song's hit instrument
+palette_pulse = 1    # [0..2] {PULSE} 0 = off, 1 = bar downbeats, 2 = every beat
+hud_metronome = 1    # [0..1] {METRONOME} 1 = on (switches below too)
+hit_flash = 1        # [0..1]
+hit_flash_ticks = 6  # [0..24] {FLASH LEN} how long a hit target flashes
+grade_popups = 1     # [0..1] {POPUPS}
+musical_hits = 1     # [0..1] {HITS} combo steps that are not OFFBEAT play the song's hit instrument (pitch N for hit N)
+quantize_hits = 1    # [0..1] {QUANTIZE} 1 = a musical hit sounds on its step slot's beat position (an early press waits for it); 0 = as soon as the step is known
+musical_hit_frames = 10   # [1..30] {HIT LEN} how long a musical hit holds P2 (frames: a sound length, not combat timing)
+musical_hit_volume = 15   # [1..15] {HIT VOL} musical hit volume
+popup_ticks = 36     # [8..96] {POPUP LEN} how long a grade popup (and the dummy's strike mark) shows, in song ticks
+popup_rise_ticks = 8 # [1..48] {POPUP RISE} a grade popup rises 1 px every this many song ticks
+break_sound_min_hits = 2  # [1..8] {BREAK HITS} a string that breaks after at least this many hits plays the break sound (fewer break silently)
+
+# PROVISIONAL (M2 combat scene). Movement is per frame: it is not combat timing.
+[player]
+walk_speed = 16      # [4..48] walk speed in 1/16 px per frame (16 = 1 px; diagonals move 3/4 of it per axis)
+dodge_px = 16        # [0..48] how far a dodge dashes: in the held direction, else straight back
+slide_halflife_ticks = 2  # [1..24] {SLIDE EASE} a lunge or dodge dash eases out, covering half its remaining distance every this many song ticks
+
+# PROVISIONAL training dummy (M2). Real enemies, telegraphs and attack tokens are M3.
+[dummy]
+attack_every_beats = 16   # [0..64] {EVERY} beats from one "!" telegraph to the next; 0 = the dummy never attacks
+telegraph_beats = 2  # [1..8] {TELEGRAPH} beats from the telegraph to the strike (which lands on that beat)
+telegraph_blink_ticks = 36  # [0..48] {BLINK LEN} the "!" telegraph shows for this many song ticks at the start of each beat (48 = steady)
+range_px = 24        # [0..64] the strike hurts a player whose feet are this close (screen px; y counts double)
+solid_w = 9          # [0..24] half-width of the dummy's footprint, which the player cannot walk into (px)
+solid_h = 5          # [0..16] half-height of that footprint (px)

@@ -1,0 +1,18 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/hit.toml to replace it.
+# Light hit: a one-frame metallic snap (7-bit noise), then a quickly decaying crunch.
+channel = "NOISE"
+priority = 6
+
+[[step]]
+frames = 1
+volume = 15
+noise_shift = 1
+noise_width = 7
+
+[[step]]
+frames = 6
+volume = 13
+env_pace = 1
+noise_shift = 4
+noise_width = 15
+noise_divisor = 1

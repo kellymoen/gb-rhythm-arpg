@@ -98,6 +98,15 @@ Repo: git + private GitHub repo `gb-rhythm-arpg` (gh authed as kellymoen; name c
 projects live outside the repo; only exported `.mid` committed. GitHub Actions: build ROM + host tests
 + pytest on push.
 
+## Changes agreed 2026-10-29 (orchestration grilling)
+- Real-hardware timing is out of scope; feel is judged in emulation with SameBoy as reference, plus a
+  shipped calibration screen, a DEBUG timing overlay and a PyBoy **feel lab** (ADR 0008).
+- Placeholders are named `*_genplaceholder.*`; `make release` refuses to ship one (ADR 0007).
+- Sprite tag `dur=` is the whole tag's length; SFX are per-effect register-level TOML (ADR 0006).
+- Hitstop + hit flash move from M4 into M2. A main menu selects scenes.
+- Process: Claude orchestrates each milestone with parallel worktree subagents and stops at a
+  milestone gate; see CLAUDE.md "Working on a milestone" and `docs/handover.md`.
+
 ## Milestones (feel-first)
 - **M0 Toolchain & skeleton:** git init + GitHub remote; install GBDK-2020 4.5.0 (GBDK_HOME outside
   repo), `brew install uv mgba` + `--cask sameboy temurin` (Emulicious needs a JDK); user installs
@@ -108,11 +117,12 @@ projects live outside the repo; only exported `.mid` committed. GitHub Actions: 
   latency offset in debug menu. **First flashcart test of latency/feel.**
 - **M2 Combos:** combo matcher + 3 strings from combos.toml, A+B dodge + perfect-dodge slow-mo, player
   placeholder (Aseprite Lua, 5 facings + mirror), beat-relative anims, VRAM frame streaming, SFX
-  stealing + musical hits — on a flat background.
+  stealing + musical hits, hitstop + hit flash on a training dummy, calibration screen + timing
+  overlay, feel lab v1 — on a flat background.
 - **M3 Arena:** Tiled iso map converter + budget report, 256×256 arena + camera, 8-way movement +
   collision, depth sort, one enemy type with on-beat telegraphs + attack tokens, soft lock + lunge, damage.
-- **M4 Juice & verdict:** shake/hitstop/flash, full tuning menu + dump, budget reports, DMG-mode pass;
-  user playtests on GBC hardware → go/no-go.
+- **M4 Juice & verdict:** shake, VFX params in the lab, full tuning menu + dump, budget reports,
+  DMG-mode pass; user playtests in SameBoy → go/no-go.
 
 ## Verification
 - Every milestone: `make` (ROM) + `make test` (host clang unit tests for beat clock, grading, combo

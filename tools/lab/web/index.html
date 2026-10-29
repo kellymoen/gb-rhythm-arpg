@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Beat ARPG feel lab</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>Feel lab</h1>
+  <span id="mode" class="pill">live</span>
+  <span id="status" class="muted"></span>
+  <span class="spacer"></span>
+  <span id="msg" role="status"></span>
+</header>
+<div id="warnings"></div>
+<main>
+  <section id="tuning" aria-label="Live tuning">
+    <div class="bar">
+      <h2>Tuning</h2>
+      <button id="save-all" title="Write every value back into its TOML source, keeping comments">Save all</button>
+      <button id="reset-all" title="Restore every value to the last saved / built default">Reset all</button>
+    </div>
+    <input id="filter" type="search" placeholder="filter fields (name, doc, effect…)" aria-label="Filter fields">
+    <pre id="save-errors" hidden></pre>
+    <div id="tables"></div>
+  </section>
+  <section id="side">
+    <div class="card">
+      <div class="bar"><h2>Press timing</h2><button id="clear-presses">Clear</button></div>
+      <canvas id="graph" width="640" height="300" aria-label="Frame error of each press against the grade windows"></canvas>
+      <div id="stats"></div>
+    </div>
+    <div class="card">
+      <div class="bar"><h2>Record / replay</h2></div>
+      <div class="row">
+        <button id="restart" title="Reboot the ROM, keeping your slider values">Restart ROM</button>
+        <button id="rec-start">Record from boot</button>
+        <input id="rec-name" placeholder="replay name" maxlength="64" size="14">
+        <button id="rec-stop" disabled>Stop &amp; save</button>
+        <button id="cancel-replay" hidden>Cancel replay</button>
+      </div>
+      <p class="muted" id="rec-help">Recording restarts the ROM at frame 0 and captures every key (and every slider change) until you stop. Hands off the keyboard during a replay.</p>
+      <ul id="replays"></ul>
+      <div id="replay-result"></div>
+    </div>
+    <div class="card">
+      <div class="bar"><h2>Screen</h2><label><input type="checkbox" id="show-screen"> mirror here</label></div>
+      <div id="screen-wrap" hidden>
+        <img id="screen" alt="Game screen" width="320" height="288">
+        <div id="pad">
+          <button data-b="up">&uarr;</button><button data-b="down">&darr;</button><button data-b="left">&larr;</button><button data-b="right">&rarr;</button>
+          <button data-b="b">B</button><button data-b="a">A</button><button data-b="select">Select</button><button data-b="start">Start</button>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

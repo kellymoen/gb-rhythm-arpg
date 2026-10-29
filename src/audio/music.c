@@ -3,9 +3,11 @@
 
 #include "audio/music.h"
 
-/* Stays in bank 0 so it can switch to the song's bank from the ISR. */
-
-#define HIT_FRAMES 10
+/* Stays in bank 0 so it can switch to the song's bank from the ISR.
+ *
+ * Channel stealing (sfx.c): a channel whose bit is set in music_locked belongs to a sound effect.
+ * The music keeps running its events there (note, instrument, duty, bend, vibrato) but writes no
+ * registers; after music_release() its next note retriggers the channel with the full state. */
 
 typedef struct {
     const uint8_t *pos;
@@ -24,10 +26,12 @@ static uint8_t song_bank;
 static volatile uint8_t playing;
 static uint8_t loaded_wave = 0xFF;
 static uint8_t lfo;
-static uint8_t hit_timer;
-static uint8_t hit_instrument;
-static uint8_t hit_count;
-static uint8_t hits[HITS_MAX];
+static const uint8_t chan_bit[CH_COUNT] = { 1, 2, 4, 8, 16 };
+
+uint8_t music_locked;
+uint8_t music_hit_instrument;
+uint8_t music_hit_count;
+uint8_t music_hits[HITS_MAX];
 
 beat_clock_t music_clock;
 uint8_t music_beats_per_bar;
@@ -51,12 +55,12 @@ static uint16_t chan_freq(const chan_t *c)
 /* Write a pitch to a tone channel without retriggering it. */
 static void write_freq(uint8_t ch, uint16_t f)
 {
+    if (music_locked & chan_bit[ch])
+        return;
     if (ch == CH_P1) {
         NR13_REG = (uint8_t)f;
         NR14_REG = (uint8_t)(f >> 8);
     } else if (ch == CH_P2) {
-        if (hit_timer)
-            return;
         NR23_REG = (uint8_t)f;
         NR24_REG = (uint8_t)(f >> 8);
     } else if (ch == CH_WAVE) {
@@ -80,6 +84,8 @@ static void note_on(uint8_t ch, const chan_t *c)
     const instrument_t *ins = &music_instruments[ch == CH_NOISE ? c->note : c->instr];
     uint16_t f;
 
+    if (music_locked & chan_bit[ch])
+        return;
     switch (ch) {
     case CH_P1:
         f = chan_freq(c);
@@ -90,8 +96,6 @@ static void note_on(uint8_t ch, const chan_t *c)
         NR14_REG = 0x80 | (uint8_t)(f >> 8);
         break;
     case CH_P2:
-        if (hit_timer)
-            break;
         f = chan_freq(c);
         NR21_REG = c->duty << 6;
         NR22_REG = (c->vol << 4) | ins->env;
@@ -117,9 +121,11 @@ static void note_on(uint8_t ch, const chan_t *c)
 
 static void note_off(uint8_t ch)
 {
+    if (music_locked & chan_bit[ch])
+        return;
     if (ch == CH_P1)
         NR12_REG = 0;
-    else if (ch == CH_P2 && !hit_timer)
+    else if (ch == CH_P2)
         NR22_REG = 0;
     else if (ch == CH_WAVE)
         NR32_REG = 0;
@@ -145,10 +151,10 @@ static void run_event(uint8_t ch, chan_t *c)
             break;
         case EV_DUTY:
             c->duty = *c->pos++;
-            if (c->note != NOTE_INDEX_NONE) {
+            if (c->note != NOTE_INDEX_NONE && !(music_locked & chan_bit[ch])) {
                 if (ch == CH_P1)
                     NR11_REG = c->duty << 6;
-                else if (ch == CH_P2 && !hit_timer)
+                else if (ch == CH_P2)
                     NR21_REG = c->duty << 6;
             }
             break;
@@ -162,7 +168,8 @@ static void run_event(uint8_t ch, chan_t *c)
             break;
         case EV_TEMPO:
             music_clock.rate = c->pos[0] | ((uint16_t)c->pos[1] << 8);
-            c->pos += 2;
+            music_bpm = c->pos[2];
+            c->pos += 3;
             break;
         case EV_LOOP:
             c->loop = c->pos;
@@ -223,21 +230,47 @@ void music_play(uint8_t bank, const song_t *song)
     beat_clock_start(&music_clock, song->rate);
     music_beats_per_bar = song->beats_per_bar;
     music_bpm = song->bpm;
-    hit_instrument = song->hit_instrument;
-    hit_count = song->hit_count;
-    memcpy(hits, song->hits, HITS_MAX);
+    music_hit_instrument = song->hit_instrument;
+    music_hit_count = song->hit_count;
+    memcpy(music_hits, song->hits, HITS_MAX);
     SWITCH_ROM(saved);
     song_bank = bank;
     playing = 1;
 }
 
+/* Leaves channels a sound effect holds alone, so an effect can ring across a scene change. */
 void music_stop(void)
 {
     playing = 0;
-    NR12_REG = 0;
-    NR22_REG = 0;
-    NR32_REG = 0;
-    NR42_REG = 0;
+    if (!(music_locked & chan_bit[CH_P1]))
+        NR12_REG = 0;
+    if (!(music_locked & chan_bit[CH_P2]))
+        NR22_REG = 0;
+    if (!(music_locked & chan_bit[CH_WAVE]))
+        NR32_REG = 0;
+    if (!(music_locked & chan_bit[CH_NOISE]))
+        NR42_REG = 0;
+}
+
+void music_release(uint8_t ch)
+{
+    switch (ch) {
+    case CH_P1:
+        NR10_REG = 0;
+        NR12_REG = 0;
+        break;
+    case CH_P2:
+        NR22_REG = 0;
+        break;
+    case CH_WAVE:
+        NR30_REG = 0;
+        loaded_wave = 0xFF; /* the effect overwrote wave RAM: reload on the next note */
+        break;
+    default:
+        NR42_REG = 0;
+        break;
+    }
+    music_locked &= ~chan_bit[ch];
 }
 
 void music_update(void)
@@ -245,8 +278,6 @@ void music_update(void)
     uint8_t saved, ch, ticks;
     chan_t *c;
 
-    if (hit_timer && --hit_timer == 0)
-        NR22_REG = 0; /* hand P2 back; the music's next P2 note retriggers it */
     if (!playing)
         return;
 
@@ -268,19 +299,4 @@ void music_now(beat_clock_t *out)
     CRITICAL {
         *out = music_clock;
     }
-}
-
-void music_hit(uint16_t n)
-{
-    const instrument_t *ins = &music_instruments[hit_instrument];
-    uint16_t f;
-
-    if (!hit_count)
-        return;
-    f = music_note_freq[hits[(uint8_t)n % hit_count]]; /* 8-bit modulo: this runs in the ISR */
-    hit_timer = HIT_FRAMES;
-    NR21_REG = ins->duty << 6;
-    NR22_REG = 0xF0 | ins->env;
-    NR23_REG = (uint8_t)f;
-    NR24_REG = 0x80 | (uint8_t)(f >> 8);
 }

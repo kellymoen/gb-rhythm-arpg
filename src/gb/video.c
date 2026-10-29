@@ -10,9 +10,13 @@ static const palette_color_t normal[] = {
 static const palette_color_t light[] = {
     RGB8(248, 252, 240), RGB8(232, 240, 216), RGB8(152, 184, 120), RGB8(72, 104, 72),
 };
+static const palette_color_t dark[] = {
+    RGB8(232, 240, 216), RGB8(72, 104, 72), RGB8(16, 32, 32), RGB8(16, 32, 32),
+};
 
 #define DMG_NORMAL 0xE4 /* index n -> shade n */
 #define DMG_LIGHT 0x90  /* each index one shade lighter */
+#define DMG_DARK 0xF8   /* colours 1-3 one shade darker; 0 (the floor, behind sprites) stays */
 
 void video_init(void)
 {
@@ -29,9 +33,9 @@ void video_init(void)
     SHOW_SPRITES;
 }
 
-void video_set_brightness(uint8_t lighter)
+void video_set_brightness(uint8_t level)
 {
-    BGP_REG = lighter ? DMG_LIGHT : DMG_NORMAL;
+    BGP_REG = level == BRIGHTNESS_PULSE ? DMG_LIGHT : level == BRIGHTNESS_DIM ? DMG_DARK : DMG_NORMAL;
     if (_cpu == CGB_TYPE)
-        set_bkg_palette(0, 1, lighter ? light : normal);
+        set_bkg_palette(0, 1, level == BRIGHTNESS_PULSE ? light : level == BRIGHTNESS_DIM ? dark : normal);
 }

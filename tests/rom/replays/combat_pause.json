@@ -1,0 +1,109 @@
+{
+ "format": "beatarpg-replay",
+ "version": 1,
+ "created": "2026-10-29T09:09:02+00:00",
+ "notes": "pause: walk to the dummy, play the string on the beat (generate.py)",
+ "rom": {
+  "name": "beatarpg-debug.gbc",
+  "sha1": "0f883ad067b6a597a70b6dd9a1f88e6b9fa09746"
+ },
+ "model": "cgb",
+ "warmup_frames": 120,
+ "frames": 235,
+ "inputs": [
+  {
+   "f": 2,
+   "held": [
+    "a"
+   ]
+  },
+  {
+   "f": 3,
+   "held": []
+  },
+  {
+   "f": 43,
+   "held": [
+    "up"
+   ]
+  },
+  {
+   "f": 51,
+   "held": [
+    "right"
+   ]
+  },
+  {
+   "f": 95,
+   "held": []
+  },
+  {
+   "f": 130,
+   "held": [
+    "a"
+   ]
+  },
+  {
+   "f": 131,
+   "held": []
+  },
+  {
+   "f": 145,
+   "held": [
+    "a"
+   ]
+  },
+  {
+   "f": 146,
+   "held": []
+  },
+  {
+   "f": 174,
+   "held": [
+    "a"
+   ]
+  },
+  {
+   "f": 175,
+   "held": []
+  }
+ ],
+ "pokes": [],
+ "expect": {
+  "presses": [
+   {
+    "f": 2,
+    "buttons": [
+     "a"
+    ],
+    "grade": "OFFBEAT",
+    "frames": 0
+   },
+   {
+    "f": 130,
+    "buttons": [
+     "a"
+    ],
+    "grade": "PERFECT",
+    "frames": 0
+   },
+   {
+    "f": 145,
+    "buttons": [
+     "a"
+    ],
+    "grade": "PERFECT",
+    "frames": 0
+   },
+   {
+    "f": 174,
+    "buttons": [
+     "a"
+    ],
+    "grade": "PERFECT",
+    "frames": 0
+   }
+  ],
+  "screen_sha1": "ce230bed333791e543303f393a2132a856ab196e"
+ }
+}

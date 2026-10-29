@@ -24,15 +24,72 @@ uint8_t beat_clock_step(beat_clock_t *c)
     return ticks;
 }
 
-/* Runs in the VBlank ISR on every press, so it stays in 16-bit math with no division beyond one
- * 8-bit divide: SDCC's 32-bit helpers cost most of a frame. Ranges: slot_len <= 12288,
+/* BEAT_TICKS / steps_per_beat for steps_per_beat 0..8 (the tuning range is 1..8), so per-frame code
+ * needs no divide. 0 maps to a whole beat instead of dividing by zero. */
+static const uint8_t slot_ticks_for[9] = {48, 48, 24, 16, 12, 9, 8, 6, 6};
+
+static uint8_t slot_ticks_now(void)
+{
+    uint8_t spb = (uint8_t)tuning.timing_steps_per_beat;
+    return spb <= 8 ? slot_ticks_for[spb] : (uint8_t)(BEAT_TICKS / spb);
+}
+
+/* a * b by shift-and-add. b is small here (steps_per_beat <= 8, |latency| <= 15), so this is a few
+ * 16-bit adds instead of SDCC's multiply helper. */
+static uint16_t mul_small(uint16_t a, uint8_t b)
+{
+    uint16_t r = 0;
+
+    while (b) {
+        if (b & 1)
+            r += a;
+        a <<= 1;
+        b >>= 1;
+    }
+    return r;
+}
+
+/* Find the step slot at or before the clock's position minus the latency offset: stores it in *slot
+ * and returns how far past it that position is, 0 <= pos < slot_len (8.8 ticks). */
+static int16_t locate(const beat_clock_t *c, uint8_t slot_ticks, uint16_t *slot)
+{
+    uint8_t slot_in_beat = 0, tick = c->tick;
+    int16_t slot_len = (int16_t)slot_ticks << 8;
+    int16_t latency = tuning.timing_latency_offset;
+    int16_t pos;
+    uint16_t s;
+
+    while (tick >= slot_ticks) {
+        tick -= slot_ticks;
+        slot_in_beat++;
+    }
+    s = mul_small(c->beat, (uint8_t)tuning.timing_steps_per_beat) + slot_in_beat;
+    pos = ((int16_t)tick << 8) + c->frac;
+
+    /* The press happened `latency_offset` frames before we saw it. */
+    if (latency >= 0)
+        pos -= (int16_t)mul_small(c->rate, (uint8_t)latency);
+    else
+        pos += (int16_t)mul_small(c->rate, (uint8_t)-latency);
+    while (pos < 0) {
+        pos += slot_len;
+        s--;
+    }
+    while (pos >= slot_len) {
+        pos -= slot_len;
+        s++;
+    }
+    *slot = s;
+    return pos;
+}
+
+/* Runs in the VBlank ISR on every press, so it stays in 16-bit adds and shifts with no multiply or
+ * divide: SDCC's helpers cost most of a frame. Ranges: slot_len <= 12288,
  * |latency * rate| <= 15 * ~1100. */
 void beat_judge(const beat_clock_t *c, judgement_t *j)
 {
-    uint8_t spb = (uint8_t)tuning.timing_steps_per_beat;
-    uint8_t slot_ticks = BEAT_TICKS / spb;
-    uint8_t slot_in_beat = 0, tick = c->tick;
-    int16_t slot_len = (int16_t)slot_ticks << 8;
+    uint8_t slot_ticks = slot_ticks_now();
+    int16_t half = (int16_t)((uint16_t)slot_ticks << 7);
     int16_t pos, dist, frames;
     uint16_t slot;
 
@@ -42,36 +99,19 @@ void beat_judge(const beat_clock_t *c, judgement_t *j)
         j->slot = 0;
         return;
     }
-
-    while (tick >= slot_ticks) {
-        tick -= slot_ticks;
-        slot_in_beat++;
-    }
-    slot = c->beat * spb + slot_in_beat;
-    pos = ((int16_t)tick << 8) + c->frac;
-
-    /* The press happened `latency_offset` frames before we saw it. */
-    pos -= tuning.timing_latency_offset * (int16_t)c->rate;
-    while (pos < 0) {
-        pos += slot_len;
-        slot--;
-    }
-    while (pos >= slot_len) {
-        pos -= slot_len;
-        slot++;
-    }
+    pos = locate(c, slot_ticks, &slot);
 
     /* Distance to the nearer slot edge, rounded to whole frames. */
-    if (pos <= slot_len / 2) {
+    if (pos <= half) {
         dist = pos;
     } else {
-        dist = slot_len - pos;
+        dist = (int16_t)((uint16_t)slot_ticks << 8) - pos;
         slot++;
     }
     dist += c->rate >> 1;
     for (frames = 0; dist >= (int16_t)c->rate; frames++)
         dist -= c->rate;
-    if (pos > slot_len / 2)
+    if (pos > half)
         frames = -frames;
 
     j->frames = (int8_t)frames;
@@ -86,14 +126,30 @@ void beat_judge(const beat_clock_t *c, judgement_t *j)
         j->grade = GRADE_OFFBEAT;
 }
 
+uint16_t beat_slot_now(const beat_clock_t *c)
+{
+    uint8_t slot_ticks = slot_ticks_now();
+    uint16_t slot;
+
+    if (c->rate == 0)
+        return 0;
+    if (locate(c, slot_ticks, &slot) > (int16_t)((uint16_t)slot_ticks << 7))
+        slot++;
+    return slot;
+}
+
 uint16_t beat_ticks_until_slot(const beat_clock_t *c, uint16_t slot)
 {
-    uint8_t spb = (uint8_t)tuning.timing_steps_per_beat;
-    uint8_t slot_ticks = BEAT_TICKS / spb;
-    uint16_t now_slot = c->beat * spb + c->tick / slot_ticks;
-    uint8_t into = c->tick % slot_ticks;
+    uint8_t slot_ticks = slot_ticks_now();
+    uint8_t into = c->tick, slot_in_beat = 0;
+    uint16_t now_slot;
 
+    while (into >= slot_ticks) {
+        into -= slot_ticks;
+        slot_in_beat++;
+    }
+    now_slot = mul_small(c->beat, (uint8_t)tuning.timing_steps_per_beat) + slot_in_beat;
     if (slot <= now_slot)
         return 0;
-    return (uint16_t)(slot - now_slot) * slot_ticks - into;
+    return mul_small(slot - now_slot, slot_ticks) - into;
 }

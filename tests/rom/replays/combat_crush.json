@@ -1,0 +1,91 @@
+{
+ "format": "beatarpg-replay",
+ "version": 1,
+ "created": "2026-10-29T09:09:02+00:00",
+ "notes": "crush: walk to the dummy, play the string on the beat (generate.py)",
+ "rom": {
+  "name": "beatarpg-debug.gbc",
+  "sha1": "0f883ad067b6a597a70b6dd9a1f88e6b9fa09746"
+ },
+ "model": "cgb",
+ "warmup_frames": 120,
+ "frames": 220,
+ "inputs": [
+  {
+   "f": 2,
+   "held": [
+    "a"
+   ]
+  },
+  {
+   "f": 3,
+   "held": []
+  },
+  {
+   "f": 43,
+   "held": [
+    "up"
+   ]
+  },
+  {
+   "f": 51,
+   "held": [
+    "right"
+   ]
+  },
+  {
+   "f": 95,
+   "held": []
+  },
+  {
+   "f": 130,
+   "held": [
+    "b"
+   ]
+  },
+  {
+   "f": 131,
+   "held": []
+  },
+  {
+   "f": 159,
+   "held": [
+    "b"
+   ]
+  },
+  {
+   "f": 160,
+   "held": []
+  }
+ ],
+ "pokes": [],
+ "expect": {
+  "presses": [
+   {
+    "f": 2,
+    "buttons": [
+     "a"
+    ],
+    "grade": "OFFBEAT",
+    "frames": 0
+   },
+   {
+    "f": 130,
+    "buttons": [
+     "b"
+    ],
+    "grade": "PERFECT",
+    "frames": 0
+   },
+   {
+    "f": 159,
+    "buttons": [
+     "b"
+    ],
+    "grade": "PERFECT",
+    "frames": 0
+   }
+  ],
+  "screen_sha1": "2f95ab42eca5bb93711a91ad9e72abf4a708c7f4"
+ }
+}

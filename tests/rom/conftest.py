@@ -1,5 +1,6 @@
 """Shared helpers for ROM tests: headless PyBoy runs, golden screenshots and symbol hooks."""
 
+import io
 import os
 from pathlib import Path
 
@@ -9,18 +10,28 @@ from pyboy import PyBoy
 
 REPO = Path(__file__).resolve().parents[2]
 GOLDEN = Path(__file__).parent / "golden"
+# Goldens use the placeholders-only ROMs (build/ph/, ADR 0007) so replacing an asset with your own
+# never changes them. "mine" is the ROM built from your assets: smoke tests only.
 ROMS = {
-    "cgb": REPO / "build/beatarpg.gbc",
-    "dmg": REPO / "build/beatarpg-dmg.gb",
-    "debug": REPO / "build/beatarpg-debug.gbc",
+    "cgb": REPO / "build/ph/beatarpg.gbc",
+    "dmg": REPO / "build/ph/beatarpg-dmg.gb",
+    "debug": REPO / "build/ph/beatarpg-debug.gbc",
+    "mine": REPO / "build/beatarpg.gbc",
 }
+BOOT_FRAMES = 120  # PyBoy's own boot animation runs for the first ~65 frames
+
+# Main-menu rows (src/scenes/menu.c), in order.
+MENU = ["combat", "calibrate", "rhythmtest"]
 
 
 def boot(variant: str, sound: bool = False) -> PyBoy:
     rom = ROMS[variant]
     if not rom.exists():
         pytest.fail(f"{rom.relative_to(REPO)} missing; run `make test-rom` (it builds every variant)")
-    return PyBoy(str(rom), window="null", cgb=variant != "dmg", sound_emulated=sound)
+    # Fresh, empty cartridge RAM: PyBoy would otherwise load <rom>.ram, leaking a saved calibration
+    # from an earlier run into every test.
+    return PyBoy(str(rom), window="null", cgb=variant not in ("dmg",), sound_emulated=sound,
+                 ram_file=io.BytesIO(bytes(0x20000)))
 
 
 def symbols(variant: str) -> dict[str, int]:
@@ -35,6 +46,16 @@ def symbols(variant: str) -> dict[str, int]:
 def press(pb: PyBoy, button: str) -> None:
     pb.button(button)
     pb.tick(1, True)
+
+
+def enter_scene(pb: PyBoy, scene: str) -> None:
+    """From a fresh boot: wait for the main menu, pick `scene`, and let it load."""
+    pb.tick(BOOT_FRAMES, True)
+    for _ in range(MENU.index(scene)):
+        press(pb, "down")
+        pb.tick(2, True)
+    press(pb, "a")
+    pb.tick(2, True)
 
 
 def assert_golden(pb: PyBoy, name: str) -> None:

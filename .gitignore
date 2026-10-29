@@ -6,3 +6,5 @@ __pycache__/
 .DS_Store
 *.sav
 *.logicx/
+.claude/worktrees/
+.claude/settings.local.json

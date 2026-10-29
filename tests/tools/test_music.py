@@ -83,7 +83,7 @@ def write_midi(tmp_path, tracks, bpm=120, name="song", markers=()):
 def decode(stream: bytes):
     """Turn a stream back into (tick, op, args) tuples, following the layout in src/audio/song.h."""
     sizes = {music.EV_OFF: 0, music.EV_INSTR: 1, music.EV_DUTY: 1, music.EV_BEND: 1, music.EV_VIB: 1,
-             music.EV_TEMPO: 2, music.EV_LOOP: 0, music.EV_END: 0, music.EV_NOP: 0}
+             music.EV_TEMPO: 3, music.EV_LOOP: 0, music.EV_END: 0, music.EV_NOP: 0}
     out, i, tick = [], 0, stream[0]
     i = 1
     while True:
@@ -112,7 +112,7 @@ def test_pulse_notes_offs_and_loop_frame(tmp_path, ins):
     path = write_midi(tmp_path, {"P1": [(0, 0.5, 69, 127), (1, 1, 72, 64)]})
     song = music.convert_song(path, ins)
     ev = decode(song.streams[0])
-    assert ev[0][1] == music.EV_LOOP
+    assert music.EV_LOOP not in [op for _, op, _ in ev]  # a loop at the start needs no LOOP event
     assert notes(ev) == [(0, 69 - 36, 15), (48, 72 - 36, 8)]
     offs = [t for t, op, _ in ev if op == music.EV_OFF]
     assert offs[:2] == [24, 96]
@@ -123,7 +123,7 @@ def test_pulse_notes_offs_and_loop_frame(tmp_path, ins):
 def test_legato_drops_the_off_that_a_new_note_replaces(tmp_path, ins):
     path = write_midi(tmp_path, {"P1": [(0, 1, 60, 100), (1, 1, 62, 100)]})
     ev = decode(music.convert_song(path, ins).streams[0])
-    assert [t for t, op, _ in ev if op == music.EV_OFF] == [96, 192]
+    assert [t for t, op, _ in ev if op == music.EV_OFF] == [96]  # none at the end: the loop's note retriggers
 
 
 def test_wave_plays_an_octave_below_the_pulse_table(tmp_path, ins):
@@ -169,7 +169,7 @@ def test_tempo_changes_and_markers(tmp_path, ins):
     assert (4 * 48, music.EV_LOOP, ()) in ev
     assert ev[-1][0] == 8 * 48
     tempo = decode(song.streams[4])
-    assert (4 * 48, music.EV_TEMPO, tuple(music.tempo_rate(120).to_bytes(2, "little"))) in tempo
+    assert music.EV_TEMPO not in [op for _, op, _ in tempo]  # constant tempo: nothing to restore
 
 
 def test_hits_track_sets_pitches_and_instrument(tmp_path, ins):
@@ -179,35 +179,118 @@ def test_hits_track_sets_pitches_and_instrument(tmp_path, ins):
     assert song.hit_instrument == 1
 
 
-@pytest.mark.parametrize("tracks, message", [
-    ({"P1": [(0, 1, 60, 100), (0, 1, 64, 100)]}, "P1 bar 1 beat 1: two notes start together"),
-    ({"P1": [(0, 1, 20, 100)]}, "outside the P1 range"),
-    ({"P1": [("pc", 0, 9), (0, 1, 60, 100)]}, "no pulse instrument has program 9"),
-    ({"NOISE": [(0, 1, 40, 100)]}, "no drum mapped to note E2 \\(40\\)"),
-    ({"Lead synth": [(0, 1, 60, 100)]}, "track 'Lead synth' has notes but isn't named"),
+@pytest.mark.parametrize("tracks, markers, message", [
+    ({"P1": [(0, 1, 60, 100), (0, 1, 64, 100)]}, (), "P1 bar 1 beat 1: two notes start together"),
+    ({"P1": [(0, 1, 20, 100)]}, (), "note G#0 \\(20\\) is outside the P1 range C2 \\(36\\)-B7 \\(107\\); transpose it "
+                                    "into that range"),
+    ({"P1": [("pc", 0, 9), (0, 1, 60, 100)]}, (), "no pulse instrument has program 9 in instruments.toml \\(defined "
+                                                  "pulse programs: 0, 5\\); add one with program = 9, or change the "
+                                                  "track's program in Logic"),
+    ({"NOISE": [(0, 1, 40, 100)]}, (), "no drum mapped to note E2 \\(40\\) \\(mapped drum notes: C2 \\(36\\)\\); add a "
+                                       "\\[\\[drum\\]\\] with note = 40 to instruments.toml, or move the hit to a mapped note"),
+    ({"Lead synth": [(0, 1, 60, 100)]}, (), "track 'Lead synth' has notes but isn't named"),
+    ({"P1": [(0, 1, 60, 100)], "p1": [(1, 1, 60, 100)]}, (),
+     "two tracks are named P1; merge them into one track or rename one in Logic before exporting"),
+    ({"P1": [(0, 1, 60, 100)]}, ((8, "end"), (12, "loop")),
+     "the 'end' marker \\(bar 3\\) must come after the 'loop' marker \\(bar 4\\); move one of them"),
+    ({"HITS": [(i, 1, 48 + i, 100) for i in range(17)]}, (),
+     "HITS track uses 17 different pitches \\(max 16\\); use at most 16 different notes on it"),
 ])
-def test_errors_say_where_and_how_to_fix(tmp_path, ins, tracks, message):
-    with pytest.raises(ConvertError, match=message):
-        music.convert_song(write_midi(tmp_path, tracks), ins)
+def test_errors_say_where_and_how_to_fix(tmp_path, ins, tracks, markers, message):
+    with pytest.raises(ConvertError, match=message) as err:
+        music.convert_song(write_midi(tmp_path, tracks, markers=markers), ins)
+    assert str(err.value).startswith(f"{tmp_path / 'song.mid'}: ")
 
 
 def test_bad_song_file_name(tmp_path, ins):
-    with pytest.raises(ConvertError, match="lower_snake_case"):
+    with pytest.raises(ConvertError, match="song file name 'My Song' must be lower_snake_case \\(it becomes a C "
+                                           "name\\); rename the file, e.g. my_song.mid"):
         music.convert_song(write_midi(tmp_path, {}, name="My Song"), ins)
 
 
-def test_instrument_errors(tmp_path):
+def test_unreadable_midi_says_to_export_again(tmp_path, ins):
+    p = tmp_path / "song.mid"
+    p.write_bytes(b"not midi")
+    with pytest.raises(ConvertError, match="cannot read MIDI file: .*; export it again from Logic as a MIDI file"):
+        music.convert_song(p, ins)
+
+
+def test_song_needs_a_pulse_instrument_for_its_hits(tmp_path):
     p = tmp_path / "instruments.toml"
-    p.write_text('[[instrument]]\nname = "x"\nprogram = 0\nkind = "pulse"\nduty = 7\n')
-    with pytest.raises(ConvertError, match="instrument 'x': 'duty' must be an integer 0-3"):
+    p.write_text('[[drum]]\nname = "k"\nnote = 36\nshift = 1\ndivisor = 1\nenv_pace = 1\n')
+    with pytest.raises(ConvertError, match="instruments.toml needs at least one pulse instrument \\(it plays the "
+                                           "hits\\); add an \\[\\[instrument\\]\\] with kind = \"pulse\""):
+        music.convert_song(write_midi(tmp_path, {}), music.load_instruments(p))
+
+
+@pytest.mark.parametrize("text, message", [
+    ('[[instrument]]\nname = "x"\nprogram = 0\nkind = "pulse"\nduty = 7\n', "instrument 'x': 'duty' must be an integer 0-3"),
+    ('[[drum]]\nname = "k"\nnote = 36\nshift = 1\ndivisor = 1\nenv_pace = 0\n', "drums must decay; set env_pace to 1-7"),
+    ('[[instrument]]\nname = "x"\nkind = "pulse"\n', "instrument 'x': missing 'program'; add program = <0-127>"),
+    ('[[instrument]]\nname = "x"\nprogram = 0\nkind = "noise"\n',
+     "instrument 'x': 'kind' must be \"pulse\" or \"wave\", got 'noise' \\(noise instruments are \\[\\[drum\\]\\] tables\\)"),
+    ('[[instrument]]\nname = "x"\nprogram = 0\nkind = "pulse"\nenv_dir = "left"\n',
+     "instrument 'x': 'env_dir' must be \"down\" or \"up\", got 'left'"),
+    ('[[instrument]]\nname = "a"\nprogram = 3\nkind = "pulse"\n[[instrument]]\nname = "b"\nprogram = 3\nkind = "pulse"\n',
+     "instrument 'b': pulse instrument 'a' already uses program 3; give one of them another program"),
+    ('[[drum]]\nname = "k"\nnote = 36\nshift = 1\ndivisor = 1\nenv_pace = 1\n'
+     '[[drum]]\nname = "s"\nnote = 36\nshift = 1\ndivisor = 1\nenv_pace = 1\n',
+     "drum 's': drum 'k' already uses note 36; map one of them to another note"),
+    ("[[instrument]\n", "invalid TOML: .*; fix the syntax at that line"),
+])
+def test_instrument_errors(tmp_path, text, message):
+    p = tmp_path / "instruments.toml"
+    p.write_text(text)
+    with pytest.raises(ConvertError, match=message) as err:
         music.load_instruments(p)
-    p.write_text('[[drum]]\nname = "k"\nnote = 36\nshift = 1\ndivisor = 1\nenv_pace = 0\n')
-    with pytest.raises(ConvertError, match="drums must decay"):
-        music.load_instruments(p)
+    assert str(err.value).startswith(f"{p}: ")
 
 
 def test_repo_music_converts():
-    ins = music.load_instruments(REPO / "assets/music/instruments.toml")
-    for path in (REPO / "assets/music").glob("*.mid"):
+    ins = music.load_instruments(REPO / "assets/music/instruments_genplaceholder.toml")
+    for path in (REPO / "assets/music").glob("*_genplaceholder.mid"):
         song = music.convert_song(path, ins)
         assert all(s[-1] == music.EV_END for s in song.streams)
+
+
+def test_combat_placeholder_changes_tempo_at_bar_5_and_loops_back():
+    ins = music.load_instruments(REPO / "assets/music/instruments_genplaceholder.toml")
+    song = music.convert_song(REPO / "assets/music/combat_genplaceholder.mid", ins)
+    assert song.name == "combat" and song.bpm == 120 and song.beats_per_bar == 4
+    tempo = decode(song.streams[4])
+    bar = 4 * 48
+    changes = [(t, args) for t, op, args in tempo if op == music.EV_TEMPO]
+    rate = lambda bpm: tuple(music.tempo_rate(bpm).to_bytes(2, "little")) + (bpm,)  # noqa: E731
+    assert changes == [(0, rate(120)), (4 * bar, rate(140))]  # loop restore, then bar 5
+    assert tempo[-1] == (8 * bar, music.EV_END, ())
+    # Every channel plays, the HITS set rises (hit N of a string plays pitch N) and the hit sound is a pulse.
+    assert all(notes(decode(s)) for s in song.streams[:4])
+    assert song.hits == sorted(song.hits) and len(song.hits) >= 5
+    assert ins.instruments[song.hit_instrument].kind == "pulse"
+
+
+def test_loop_frame_restores_only_what_the_song_changed(tmp_path, ins):
+    """Every event on the loop frame costs ISR time, so restores and OFFs appear only when needed."""
+    path = write_midi(tmp_path, {"P1": [(0, 1, 60, 100), ("bend", 6, 4096), (6, 1, 62, 100)],
+                                 "P2": [(1, 1, 60, 100)]}, markers=[(4, "loop"), (8, "end")])
+    song = music.convert_song(path, ins)
+    p1, p2 = decode(song.streams[0]), decode(song.streams[1])
+    at_loop = lambda ev: [(op, a) for t, op, a in ev if t == 4 * 48]  # noqa: E731
+    assert (music.EV_BEND, (0,)) in at_loop(p1)  # bent after the loop point: restored
+    assert [op for op, _ in at_loop(p2)] == [music.EV_LOOP]  # nothing changed: no restores
+    tempo = decode(song.streams[4])
+    assert music.EV_TEMPO not in [op for _, op, _ in tempo]  # one tempo throughout: song.rate covers it
+    # A note on the loop tick retriggers the channel, so the end needs no OFF.
+    looped = decode(music.convert_song(write_midi(tmp_path, {"P1": [(0, 1, 60, 100)]}, name="s2"), ins).streams[0])
+    assert [t for t, op, _ in looped if op == music.EV_OFF] == [48]
+
+
+def test_too_many_instruments_says_how_many_to_remove(tmp_path):
+    p = tmp_path / "instruments.toml"
+    pulses = "".join(f'[[instrument]]\nname = "p{i}"\nprogram = {i}\nkind = "pulse"\n' for i in range(128))
+    waves = "".join(f'[[instrument]]\nname = "w{i}"\nprogram = {i}\nkind = "wave"\nwave = "{"0" * 32}"\n'
+                    for i in range(128))
+    p.write_text(pulses + waves)
+    with pytest.raises(ConvertError, match=r"256 instruments and drums, at most 255 fit; remove 1 \[\[instrument\]\] "
+                                           r"or \[\[drum\]\] tables"):
+        music.load_instruments(p)
