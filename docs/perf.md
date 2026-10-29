@@ -121,8 +121,10 @@ A press's attack starts 2 frames after the press (the `dodge_grace` hold-back), 
 scripted strings: scheduling added no delay. Its first frame shows 1-2 frames after that (streaming).
 
 **Scheduling policy** (`src/scenes/combatflat.c`): presses are graded in the ISR, so everything here
-only moves visuals. Each costly step starts only before its LY limit: another press to the matcher
-< 64, the matcher's tick < 80 (and never while presses are still queued), the player's attack/dodge
+only moves visuals (and schedules musical hits, below). Each costly step starts only before its LY
+limit: another press to the matcher < 64, the matcher's tick < 80 (and never while presses are still
+queued), the early landing of a held-back press (`combo_land`, its musical hit) < 44 and not on a
+frame whose player hit frame is due, the player's attack/dodge
 start < 68 (first, before anims update; its anim then advances from the next frame with the ticks
 carried), a new anim frame shown < 60, one other anim start/turn < 64, a text job < 100 (only when
 nothing costly ran), the DEBUG overlay < 112, streaming until 120, a late OAM rewrite < 126. A loop
@@ -130,6 +132,38 @@ starting at LY >= 36 leaves presses queued and does nothing costly; at >= 64 it 
 characters' song ticks carry to the next frame (anims stay on the beat; a hit frame lands a frame
 late). The dummy's update is skipped (ticks carried, at most 24) when it would cost a call on a frame
 that already showed a new frame.
+
+### Musical hits after the review fixes (2026-10-29)
+
+Hits now follow the combo matcher (`gb/isr.h`). The main loop schedules a step's hit as soon as the
+matcher lands its press; the VBlank ISR plays it once `dodge_grace` frames have passed with no other
+button (so a dodge plays none) and, with `feedback.quantize_hits`, once the beat clock reaches the
+step slot's start (a compare of beat and tick, no multiply).
+
+The landing used to happen when the held-back press committed (the tick 2 frames after the press,
+~27 lines). Doing it in `combo_press` on the press's own frame overran frames under button spam: the
+worst landing (break + restart) is ~33 lines plus ~7 for `isr_hit_schedule`, and a frame that also
+reached the player's hit frame (~28) ended past line 154. So `combo_press` still only holds the press
+(cheap) and `combo_land` lands it early when there is room: before LY 44, never on a frame whose player
+hit frame is due (`hit_frame_due`: the attack's musical position reaches its hit frame this frame).
+Otherwise the commit lands it, as before.
+
+Press to hit sound, measured in PyBoy (`tests/rom/test_combat.py::test_hit_latency`, and 1500 frames
+of the spam run with quantize off, CGB and DMG identical):
+
+| Press | `quantize_hits = 1` | `quantize_hits = 0` |
+|-------|------------------|------------------|
+| Early (5 frames before its slot) | on the slot: 5 frames, the first frame at or after the slot's start | 2 frames |
+| On time | 2 frames (`dodge_grace`) | 2 frames |
+| Late (4 frames) | 2 frames | 2 frames |
+| Under spam (all presses) | - | 2 frames 95%, 3 frames at worst |
+
+`dodge_grace` frames is the floor for an on-time or late press: before then a B could still turn the
+A into a dodge. Before these fixes every non-OFFBEAT press played on its own frame (0 frames), at the
+previous step's pitch, dodges and ignored presses included.
+
+Spam run after the fixes: `vsync()` called at LY 105 / 131 / 141 (median / p95 / max), no missed
+frames (was 98 / - / 140). The ISR's hit check is a few lines; `sfx_hit` still ~9 when a hit plays.
 
 Fixed on the way: the LYC=143 VBlank stream handler assumed whole tiles; after an HBlank copy stopped
 inside a tile it wrapped `units` and overwrote both characters' slots. It now finishes the partial
@@ -142,6 +176,13 @@ tile first.
 - The first `beat_judge` used 32-bit divide and multiply and ran the ISR ~90 lines into the visible
   frame on every press. The fix is 16-bit math with subtraction loops.
 - Writing text while the LCD is on is slow, so scenes do at most one text job per frame.
+
+## Bank 0
+
+`romusage build/beatarpg.map -g`, release ROM. Before the M2 review fixes: 3733 bytes free. The
+musical-hit scheduler in `isr.c` (bank 0: the ISR reads it) cost ~340 (3395 free). Banking `menu.c`,
+`scene.c` and `core/calib.c` (only `menu_run` stays in bank 0, as a NONBANKED wrapper) brought it to
+4301 free (DEBUG ROM: 2035 -> 2940).
 
 ## Debt
 
