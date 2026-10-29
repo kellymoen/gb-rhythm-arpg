@@ -22,7 +22,8 @@ def test_fields_are_table_prefixed_in_file_order(tmp_path):
 
 
 def test_render_emits_struct_defaults_and_reset(tmp_path):
-    header, source = tuning.render([("timing_perfect_window", -3)], "data/tuning.toml")
+    param = tuning.Param("timing", "perfect_window", -3, -5, 5, "doc", "PERFE WIND")
+    header, source = tuning.render([param], "data/tuning.toml")
     assert "int16_t timing_perfect_window;" in header
     assert "void tuning_reset(void);" in header
     assert "-3, /* timing_perfect_window */" in source
@@ -32,17 +33,21 @@ def test_render_emits_struct_defaults_and_reset(tmp_path):
 @pytest.mark.parametrize(
     "text, message",
     [
-        ("perfect_window = 3\n", "'perfect_window' must be a [table]"),
+        ("perfect_window = 3\n", "'perfect_window' must be a [table] of integer params; move it under one"),
         ("[timing]\nperfect_window = 1.5\n", "'timing.perfect_window' must be an integer"),
         ("[timing]\nflash = true\n", "'timing.flash' must be an integer"),
-        ("[timing]\nbig = 40000\n", "does not fit in int16"),
-        ("[timing]\nBadName = 1\n", "lower_snake_case"),
+        ("[timing]\nbig = 40000\n", "does not fit in int16; use a value from -32768 to 32767"),
+        ("[timing]\nBadName = 1\n", "'timing.BadName' must be lower_snake_case; rename it, e.g. badname"),
+        ("[Timing]\nx = 1\n", "table name 'Timing' must be lower_snake_case; rename it, e.g. [timing]"),
         ("[timing\n", "invalid TOML"),
+        ("[a_b]\nc = 1\n[a]\nb_c = 2\n", "'a.b_c' and 'a_b.c' both become the C field a_b_c; rename one"),
     ],
 )
 def test_errors_name_the_offending_param(tmp_path, text, message):
-    with pytest.raises(ConvertError, match=message.replace("[", r"\[")):
-        tuning.parse(write(tmp_path, text))
+    p = write(tmp_path, text)
+    with pytest.raises(ConvertError) as e:
+        tuning.parse(p)
+    assert str(e.value).startswith(f"{p}: ") and message in str(e.value)
 
 
 def test_repo_tuning_file_converts():
@@ -76,7 +81,7 @@ def test_negative_and_spaced_ranges(tmp_path):
         ("[timing]\nperfect_window = 3  # [0-10] wrong separator\n", "'timing.perfect_window' needs its allowed range"),
         ("[timing]\nperfect_window = 11  # [0..10] too big\n", "'timing.perfect_window' = 11 is outside its range [0..10]"),
         ("[timing]\nperfect_window = -1  # [0..10] too small\n", "= -1 is outside its range [0..10]"),
-        ("[timing]\nperfect_window = 3  # [10..0] swapped\n", "minimum must not exceed the maximum"),
+        ("[timing]\nperfect_window = 3  # [10..0] swapped\n", "minimum must not exceed the maximum, so swap them"),
     ],
 )
 def test_range_errors_name_file_key_and_fix(tmp_path, text, message):
@@ -133,5 +138,62 @@ def test_repo_tuning_descriptor_matches_the_struct():
     fields = json.loads(tuning.lab_descriptor(params, "data/tuning.toml"))["fields"]
     assert [f["offset"] for f in fields] == [2 * i for i in range(len(fields))]
     assert all(f["min"] <= f["default"] <= f["max"] for f in fields)
-    header, _ = tuning.render([(p.name, p.value) for p in params], "data/tuning.toml")
+    header, _ = tuning.render(params, "data/tuning.toml")
     assert header.count("int16_t ") == len(fields)
+    assert header.count("    X(") == len(fields)
+
+
+# ---- debug menu (ADR 0004: every tuning param is tunable live in the debug menu) --------------------
+def test_menu_labels_derive_from_the_key_and_fit_ten_columns(tmp_path):
+    p = write(tmp_path, "[timing]\ngood_ticks = 1  # [0..9] a\nperfect_window = 3  # [0..10] b\nx = 1  # [0..1]\n")
+    assert [q.label for q in tuning.parse_params(p)] == ["GOOD TICKS", "PERFE WIND", "X"]
+
+
+def test_menu_label_override_in_braces_is_not_part_of_the_doc(tmp_path):
+    p = write(tmp_path, "[timing]\nsteps_per_beat = 2  # [1..8] {STEPS/BEAT} slots per beat\n")
+    (param,) = tuning.parse_params(p)
+    assert (param.label, param.doc) == ("STEPS/BEAT", "slots per beat")
+
+
+@pytest.mark.parametrize(
+    "label, message",
+    [
+        ("{TOO LONG LABEL}", "debug menu label {TOO LONG LABEL} is 14 characters; at most 10 fit"),
+        ("{lower}", "debug menu label {lower} uses 'e', 'l', 'o', 'r', 'w', which the font has no glyph for"),
+        ("{A_B}", "uses '_', which the font has no glyph for; use only A-Z, 0-9, space and +-.:/!?%><"),
+        ("{}", "debug menu label {} must be a non-empty string"),
+    ],
+)
+def test_bad_menu_label_names_file_param_and_fix(tmp_path, label, message):
+    p = write(tmp_path, f"[timing]\nperfect_window = 3  # [0..10] {label} doc\n")
+    with pytest.raises(ConvertError) as e:
+        tuning.parse_params(p)
+    assert str(e.value).startswith(f"{p}: 'timing.perfect_window': ")
+    assert message in str(e.value)
+    assert "remove the {...} after the range to use 'PERFE WIND'" in str(e.value)
+
+
+def test_menu_labels_must_differ_within_a_table(tmp_path):
+    p = write(tmp_path, "[t]\nhit_flash_ticks = 1  # [0..9] a\nhit_flash_tick = 1  # [0..9] b\n[u]\nhit_flash_tick = 1  # [0..9]\n")
+    with pytest.raises(ConvertError, match=r"'t\.hit_flash_tick' and 't\.hit_flash_ticks' share the debug menu label "
+                                           r"'HIT FLA TI' on the \[t\] page; give one its own label"):
+        tuning.parse_params(p)
+
+
+def test_menu_macros_list_params_and_one_page_per_table(tmp_path):
+    p = write(tmp_path, "[timing]\na = 3  # [0..10] {AAA} one\nb = -2  # [-5..5] two\n"
+                        "[hit_stop]\nc = 1  # [0..1] three\n")
+    header, _ = tuning.render(tuning.parse_params(p), "data/tuning.toml")
+    assert '    X(timing_a, "AAA", "timing.a", 0, 10) \\\n' in header
+    assert '    X(timing_b, "B", "timing.b", -5, 5) \\\n' in header
+    assert '    X(hit_stop_c, "C", "hit_stop.c", 0, 1)\n' in header
+    assert '    T("TIMING", 0, 2) \\\n    T("HIT STOP", 2, 1)\n' in header
+    assert "#define TUNING_PARAM_COUNT 3\n" in header and "#define TUNING_TABLE_COUNT 2\n" in header
+
+
+def test_repo_tuning_labels_are_unique_within_a_page():
+    repo = Path(__file__).resolve().parents[2]
+    params = tuning.parse_params(repo / "data" / "tuning.toml")
+    for table in {p.table for p in params}:
+        labels = [p.label for p in params if p.table == table]
+        assert len(labels) == len(set(labels)), f"[{table}] has two params with the same menu label: {labels}"
