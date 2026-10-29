@@ -3,25 +3,42 @@
 
 #include <stdint.h>
 
+#include "combos.h"
 #include "core/beat.h"
 
-/* Combo string matcher (ADR 0004). Portable: the scene feeds it judged presses and step-slot
- * changes, and it reports what the player did. Strings, steps and attacks come from
- * data/combos.toml via tools/gbtools/combos.py (in DEBUG builds the table lives in RAM so the
- * feel lab can edit it live).
+/* Combo string matcher (ADR 0004). Portable: the scene feeds it judged presses and the beat clock,
+ * and it reports what the player did. Strings, steps and attacks come from data/combos.toml via
+ * tools/gbtools/combos.py (generated combos.h: in DEBUG builds the table lives in RAM so the feel lab
+ * can edit it live; the matcher rereads it on every press).
  *
  * Rules (PROVISIONAL defaults, see docs/decisions-pending.md):
  * - A step lands on the step slot its press is graded against. OFFBEAT steps still advance the
- *   string, flagged so the scene can weaken them.
- * - A written rest ('.') is a step slot that must stay empty.
- * - An unwritten empty step slot ends the string after `combat.string_grace` slots.
- * - A and B within `input.dodge_grace` frames is a dodge, not two attacks. */
+ *   string, flagged (event grade) so the scene can weaken them.
+ * - A written rest ('.') is a step slot that must stay empty: a press there breaks the string.
+ * - An unwritten empty step slot is slack: the string survives `combat.string_grace` of them in a
+ *   row, and breaks on the next.
+ * - A and B within `input.dodge_grace` frames is a dodge, not two attacks. Its grade is the earlier
+ *   press's; a PERFECT dodge is a perfect dodge (slow-mo). A dodge ends the current string.
+ * - A second press judged against the slot the string's last step already took is ignored.
+ * - Strings that start with the same steps stay candidates together until they diverge. When a press
+ *   fits several, the one that needs the fewest grace slots wins (so the rest in `A A . A` beats
+ *   the slack `A A _ A` of `A A A A`), then the one whose step names the held direction (fB beats B).
+ *
+ * Driving it from the main loop, every frame:
+ *     frame = input_frame;                   read BEFORE draining the queue (dodge_grace timing)
+ *     while (input_pop(&p)) combo_press(...)  one combo_input_t per press
+ *     music_now(&now);
+ *     combo_tick(&c, &now, frame, ev)
+ * and act on the events each call returns. Main loop only: the matcher is not reentrant. */
 
-#define COMBO_A 0x01
+#define COMBO_A 0x01 /* same bits as a step byte's button (generated combos.h) */
 #define COMBO_B 0x02
 
-/* Held direction at the time of the press, relative to the player's facing. */
+/* Held direction at the time of the press, relative to the player's facing (a step byte's bits 2-3). */
 enum { COMBO_DIR_NONE, COMBO_DIR_FWD, COMBO_DIR_BACK, COMBO_DIR_SIDE };
+
+#define COMBO_IDLE 0xFF   /* combo_t.string / combo_event_t.string when no string is involved */
+#define COMBO_MAX_EVENTS 2
 
 typedef struct {
     uint8_t buttons;       /* COMBO_A and/or COMBO_B newly pressed */
@@ -40,30 +57,50 @@ enum {
 
 typedef struct {
     uint8_t type;          /* COMBO_EV_* */
-    uint8_t string;        /* index into the generated string table */
-    uint8_t step;          /* 0-based step within the string: also the musical-hit pitch index */
-    uint8_t attack;        /* index into the generated attack table (anim, damage, lunge...) */
-    grade_t grade;
+    uint8_t string;        /* COMBO_STRING_*: STEP/BREAK name the lowest-numbered string still
+                            * possible, FINISH the one completed. COMBO_IDLE for DODGE */
+    uint8_t step;          /* STEP/FINISH: 0-based hit within the string (rests don't count), also
+                            * the musical-hit pitch index. BREAK: hits landed before it broke */
+    uint8_t attack;        /* COMBO_ATTACK_* (index into combos.attacks), or COMBO_NO_ATTACK */
+    grade_t grade;         /* the press's grade (DODGE: the earlier press's); OFFBEAT for BREAK */
 } combo_event_t;
 
+/* Private: read only through events. */
 typedef struct {
-    uint8_t string;        /* candidate string, or 0xFF when idle */
-    uint8_t step;
-    uint16_t last_slot;
-    uint8_t empty_slots;
+    const combo_string_t *strings;
+    uint8_t count;
+    uint8_t all;           /* bitmask of every string */
+    uint8_t string;        /* lowest candidate string, or COMBO_IDLE */
+    uint8_t cands;         /* bitmask of strings the steps so far still fit */
+    uint8_t pos;           /* step index (rests included) of the last landed step */
+    uint8_t step;          /* hits landed so far */
+    uint16_t last_slot;    /* step slot of the last landed step */
+    uint16_t deadline;     /* last slot a press can still continue some candidate */
     uint8_t pending;       /* a lone A/B held back for dodge_grace frames */
     combo_input_t held;
 } combo_t;
 
-void combo_reset(combo_t *c);
+#ifdef __SDCC
+#define COMBO_BANKED __banked /* the matcher lives in a switchable bank; its tables are in bank 0/RAM */
+#else
+#define COMBO_BANKED
+#endif
+
+/* Start idle, matching against the generated table (combos.strings). */
+void combo_reset(combo_t *c) COMBO_BANKED;
+
+/* Start idle, matching against `count` (<= 8) strings at `strings`, which must be in bank 0 or RAM. */
+void combo_reset_with(combo_t *c, const combo_string_t *strings, uint8_t count) COMBO_BANKED;
 
 /* Feed one press. Returns the number of events written to `out` (0..2: a held-back press can
- * resolve as a step and the new press start another). */
-uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[2]);
+ * resolve as BREAK + STEP, a dodge can end a string: BREAK + DODGE). */
+uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[COMBO_MAX_EVENTS]) COMBO_BANKED;
 
-/* Call once per main-loop frame with the current step slot and frame counter: resolves held-back
- * presses after dodge_grace and breaks strings after string_grace empty slots. Returns the number
- * of events written (0..2). */
-uint8_t combo_tick(combo_t *c, uint16_t slot, uint8_t frame, combo_event_t out[2]);
+/* Call once per main-loop frame after the presses, with the beat clock (music_now) and the frame
+ * counter read before draining the press queue: resolves held-back presses after dodge_grace and
+ * breaks strings after string_grace empty slots. While a string runs it computes beat_slot_now(now),
+ * the slot a press made now would be judged against; idle frames skip that. Returns the number of
+ * events written (0..2). */
+uint8_t combo_tick(combo_t *c, const beat_clock_t *now, uint8_t frame, combo_event_t out[COMBO_MAX_EVENTS]) COMBO_BANKED;
 
 #endif
