@@ -31,20 +31,34 @@ class ApiError(Exception):
 
 
 def describe(m: Machine) -> list[dict]:
-    return [
-        {
-            "name": t.name, "source": t.source, "symbol": t.symbol, "available": all(f.id in m.fields for f in t.fields),
-            "fields": [
-                {
-                    "id": f.id, "path": list(f.path), "label": f.label, "type": f.type, "min": f.min, "max": f.max,
-                    "default": f.default, "doc": f.doc, "values": f.values, "restart": f.restart,
-                    "available": f.id in m.fields,
-                }
-                for f in t.fields
-            ],
-        }
-        for t in m.tables
-    ]
+    """The tables for the UI. Synthesised step slots are listed only once the length has reached them."""
+    listed = {f.id for _, f in m.listed()}
+    out = []
+    for t in m.tables:
+        fields = []
+        for f in t.fields:
+            if f.id not in listed and f.id in m.fields:
+                continue
+            fd = {
+                "id": f.id, "path": list(f.path), "label": f.label, "type": f.type, "min": f.min, "max": f.max,
+                "default": f.default, "doc": f.doc, "values": f.values, "restart": f.restart,
+                "available": f.id in m.fields, "source": f.source, "step": f.step,
+            }
+            if f.none is not None:
+                fd["none"] = f.none
+            if f.array_length:
+                fd["array_length"] = True
+            if f.absent:
+                fd["absent"] = True
+            if f.id in m._arrays:
+                arr, k = m._arrays[f.id]
+                fd["array"] = {"length": arr.id, "index": k}
+            fields.append(fd)
+        out.append({
+            "name": t.name, "source": t.source, "symbol": t.symbol, "sources": t.sources(), "fields": fields,
+            "available": all(f.id in m.fields for f in t.fields),
+        })
+    return out
 
 
 def replay_names(m: Machine) -> list[str]:
@@ -125,7 +139,7 @@ def make_handler(m: Machine, port: int, repo: Path):
         def _api_get(self, path: str, query: dict) -> None:
             if path == "/api/state":
                 return self._json({
-                    "tables": describe(m), "status": m.call(m.status), "replays": replay_names(m),
+                    "tables": m.call(lambda: describe(m)), "status": m.call(m.status), "replays": replay_names(m),
                     "replay_dir": str(m.replay_dir), "rom": m.rom.name,
                 })
             if path == "/api/values":
@@ -152,9 +166,9 @@ def make_handler(m: Machine, port: int, repo: Path):
                     raise ApiError(400, "value must be an integer")
                 return self._json({"value": m.call(lambda: m.set_value(str(body.get("id")), body["value"]))})
             if path == "/api/reset":
-                return self._json({"changed": m.call(lambda: m.reset(body.get("table")))})
+                return self._json({"changed": m.call(lambda: m.reset(body.get("table"), body.get("source")))})
             if path == "/api/save":
-                return self._json({"saved": m.call(lambda: m.save(body.get("table")))})
+                return self._json(m.call(lambda: m.save(body.get("table"), body.get("source"))))
             if path == "/api/restart":
                 return self._json({"ok": m.call(m.restart) or True})
             if path == "/api/input":

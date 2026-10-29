@@ -1,6 +1,7 @@
 """The lab against the real DEBUG ROM (headless PyBoy): WRAM addressing, replay determinism, the server."""
 
 import json
+import shutil
 import subprocess
 import threading
 import time
@@ -13,6 +14,7 @@ import pytest
 from lab.descriptor import load_tables
 from lab.emu import Machine
 from lab.replay import Recorder, Replay, WARMUP, load_replay, new_pyboy, run_replay
+from gbtools import sfx
 from lab.server import serve
 from lab.symbols import load_symbols
 
@@ -34,8 +36,16 @@ def tables(rom):
     return load_tables(GEN)
 
 
-def machine(rom, tables, tmp_path) -> Machine:
-    return Machine(rom, tables, REPO, tmp_path / "replays", window="null", audio=False, realtime=False)
+def machine(rom, tables, tmp_path, repo=REPO) -> Machine:
+    return Machine(rom, tables, repo, tmp_path / "replays", window="null", audio=False, realtime=False)
+
+
+def scratch_repo(tmp_path) -> Path:
+    """A copy of the TOML sources, so saving never touches the real assets/ and data/."""
+    repo = tmp_path / "repo"
+    shutil.copytree(REPO / "assets/sfx", repo / "assets/sfx")
+    shutil.copytree(REPO / "data", repo / "data")
+    return repo
 
 
 def script(machine_obj, steps):
@@ -245,3 +255,157 @@ def test_server_record_replay_and_press_stream(lab_server):
     assert http(port, "/api/presses?after=0")[1]["seq"] >= 0
     assert http(port, "/api/replay/check", {"name": "s1"})[1]["ok"] is True
     assert http(port, "/api/replay/check", {"name": "missing"})[0] == 404
+
+
+# ---- the sfx and combos descriptors (ADR 0008 extensions) -----------------------------------------
+def by_label(m: Machine, table: str, source_part: str = ""):
+    return {f.label: f for t, f in m.fields.values() if t.name == table and source_part in f.source}
+
+
+def test_all_three_descriptors_load_with_symbols_in_the_rom(rom, tables):
+    syms = load_symbols(rom)
+    assert [t.name for t in tables] == ["tuning", "combos", "sfx"]
+    assert all(t.symbol in syms for t in tables)
+    sfx_t = tables[2]
+    assert len(sfx_t.sources()) == 10 and len([f for f in sfx_t.fields if not f.synth]) > 200
+    assert len(tables[1].fields) > 90
+
+
+def test_unset_writes_the_sentinel_to_wram_and_back(rom, tables, tmp_path):
+    m = machine(rom, tables, tmp_path)
+    try:
+        vol = by_label(m, "sfx", "/calib_click")["step.0.volume"]
+        t, _ = m.fields[vol.id]
+        assert m.set_value(vol.id, 255) == 255 and m.mem.read(m.addr(vol, t), 1) == b"\xff"
+        assert m.set_value(vol.id, 7) == 7
+        pitch = by_label(m, "sfx", "/calib_click")["step.0.pitch"]
+        assert m.set_value(pitch.id, 65535) == 65535 and m.mem.read(m.addr(pitch, t), 2) == b"\xff\xff"
+        with pytest.raises(ValueError, match="outside its range"):
+            m.set_value(vol.id, 100)
+    finally:
+        m.pb.stop(save=False)
+
+
+def test_raising_a_step_count_lists_and_initialises_the_new_slots(rom, tables, tmp_path):
+    m = machine(rom, tables, tmp_path)
+    try:
+        f = by_label(m, "sfx", "/calib_click")
+        count = f["step"]
+        before = {x.id for _, x in m.listed()}
+        assert f["step.1.frames"].id not in before  # not offered until the length reaches it
+        m.set_value(count.id, 3)
+        t = m.fields[count.id][0]
+        assert {f["step.1.frames"].id, f["step.2.frames"].id} <= {x.id for _, x in m.listed()}
+        assert m.read_field(t, f["step.1.frames"]) == 1 and m.read_field(t, f["step.2.volume"]) == 255  # not zeros
+        m.set_value(count.id, 1)  # lowering hides but keeps them listed (the UI hides the rows)
+        assert f["step.2.frames"].id in {x.id for _, x in m.listed()} and not m.in_use(f["step.2.frames"])
+        assert f["step.0.frames"].id in m.values()
+    finally:
+        m.pb.stop(save=False)
+
+
+def test_a_saved_effect_converts_to_the_bytes_the_lab_put_in_wram(rom, tables, tmp_path):
+    """Raise the step count, edit the new steps, unset a key, save, run the real converter on the file:
+    the effect's step bytes equal what the ROM table holds."""
+    repo = scratch_repo(tmp_path)
+    m = machine(rom, tables, tmp_path, repo)
+    try:
+        for name in ("calib_click", "swing_light"):
+            f = by_label(m, "sfx", f"/{name}_")
+            t = m.fields[f["step"].id][0]
+            src = repo / f["step"].source
+            n = f["step"].default
+            m.set_value(f["step"].id, n + 2)
+            m.set_value(f[f"step.{n}.frames"].id, 6)
+            m.set_value(f[f"step.{n}.volume"].id, 9)
+            key = "pitch" if "step.0.pitch" in f else "noise_shift"
+            m.set_value(f[f"step.{n}.{key}"].id, 700 if key == "pitch" else 5)
+            m.set_value(f[f"step.{n + 1}.frames"].id, 3)  # a step that only waits
+            res = m.save("sfx", f["step"].source)
+            assert res["errors"] == [] and res["saved"]["sfx"] >= 4, res
+            effect = sfx.load_effect(src)
+            assert len(effect.steps) == n + 2
+            base = f["priority"].offset - 1
+            ram = m.mem.read(m.symbols[t.symbol] + base, 4 + 12 * 16)
+            assert ram[2] == len(effect.steps)  # the count byte
+            for i, step in enumerate(effect.steps):
+                assert ram[4 + 12 * i : 4 + 12 * (i + 1)] == step, (name, i)
+            assert m.save("sfx", f["step"].source) == {"saved": {}, "errors": []}  # defaults moved: nothing left to save
+    finally:
+        m.pb.stop(save=False)
+    # the real placeholders were never touched
+    assert subprocess.run(["git", "status", "--porcelain", "assets", "data"], cwd=REPO, capture_output=True, text=True).stdout == ""
+
+
+def test_a_save_the_converter_would_reject_is_refused_and_reported(rom, tables, tmp_path):
+    repo = scratch_repo(tmp_path)
+    m = machine(rom, tables, tmp_path, repo)
+    try:
+        f = by_label(m, "sfx", "/calib_click_")
+        src = repo / f["step"].source
+        before = src.read_text()
+        m.set_value(f["step.0.volume"].id, 255)  # unset the trigger while env/length keys remain
+        res = m.save("sfx", f["step"].source)
+        assert res["saved"] == {} and len(res["errors"]) == 1
+        assert "not saved" in res["errors"][0] and "step 1" in res["errors"][0] and str(src) in res["errors"][0]
+        assert src.read_text() == before
+    finally:
+        m.pb.stop(save=False)
+
+
+def test_combos_save_adds_absent_keys_and_is_vetted_by_the_converter(rom, tables, tmp_path):
+    from gbtools import combos
+
+    repo = scratch_repo(tmp_path)
+    m = machine(rom, tables, tmp_path, repo)
+    try:
+        f = by_label(m, "combos")
+        # an attack whose TOML has no `sfx` key yet: setting one adds the key
+        sfx_field = next(x for x in f.values() if x.absent and x.path[0] == "attack" and x.path[-1] == "sfx")
+        m.set_value(sfx_field.id, next(v for n, v in sfx_field.values.items() if n))
+        m.set_value(f["string.0.unlock"].id, 4)
+        res = m.save("combos")
+        assert res["errors"] == [] and res["saved"]["combos"] == 2, res
+        combos.parse(repo / "data/combos.toml")
+        assert "unlock = 4" in (repo / "data/combos.toml").read_text()
+        # a step with no attack is the converter's business: the save is refused, the file untouched
+        k = next(x.path[-1] for x in f.values() if x.absent and x.path[:3] == ("string", 0, "steps"))
+        before = (repo / "data/combos.toml").read_text()
+        m.set_value(f[f"string.0.steps.{k}"].id, f[f"string.0.steps.{k}"].values["A"])
+        res = m.save("combos")
+        assert res["saved"] == {} and "has no attack" in res["errors"][0]
+        assert (repo / "data/combos.toml").read_text() == before
+    finally:
+        m.pb.stop(save=False)
+
+
+def test_reset_and_save_can_target_one_source(rom, tables, tmp_path):
+    m = machine(rom, tables, tmp_path)
+    try:
+        a, b = by_label(m, "sfx", "/hit_h")["priority"], by_label(m, "sfx", "/dodge")["priority"]
+        m.set_value(a.id, 1)
+        m.set_value(b.id, 1)
+        assert m.reset("sfx", a.source) == 1
+        assert m.values()[a.id] == a.default and m.values()[b.id] == 1
+    finally:
+        m.pb.stop(save=False)
+
+
+def test_the_state_endpoint_describes_sources_none_step_and_arrays(lab_server):
+    m, port = lab_server
+    code, st = http(port, "/api/state")
+    sfx_t = next(t for t in st["tables"] if t["name"] == "sfx")
+    assert len(sfx_t["sources"]) == 10 and all(f["source"] for f in sfx_t["fields"])
+    width = next(f for f in sfx_t["fields"] if f["label"] == "step.0.noise_width")
+    assert (width["step"], width["none"], width["min"], width["max"]) == (8, 255, 7, 15)
+    count = next(f for f in sfx_t["fields"] if f["path"] == ["step"])
+    assert count["array_length"]
+    step = next(f for f in sfx_t["fields"] if f["source"] == count["source"] and f["path"] == ["step", 0, "frames"])
+    assert step["array"] == {"length": count["id"], "index": 0}
+    # raising the count lists new slots; they are marked absent (the file has no such step yet)
+    http(port, "/api/set", {"id": count["id"], "value": count["default"] + 1})
+    code, st2 = http(port, "/api/state")
+    sfx2 = next(t for t in st2["tables"] if t["name"] == "sfx")
+    new = [f for f in sfx2["fields"] if f["source"] == count["source"] and f["path"][:2] == ["step", count["default"]]]
+    assert new and all(f["absent"] for f in new)
+    assert http(port, "/api/values")[1]["values"][new[0]["id"]] == 1

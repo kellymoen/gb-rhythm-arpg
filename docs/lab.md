@@ -29,6 +29,31 @@ in the sliders too (they are polled).
   slider values.
 - Ranges come from the TOML comment `# [min..max] doc`; a slider cannot leave its range.
 
+### Many tables, many files
+
+`make lab` loads every descriptor: `tuning` (the feel numbers), `combos` (every combo string and attack:
+patterns, damage, lunge, sound) and `sfx` (every effect, every step). The tuning panel is built for that
+size: each table is a collapsible block, a table that spans several files (`sfx`: one per effect) has one
+block per file with its own **Save** and **Reset**, and inside a file the fields are grouped by the TOML
+table they live in (`step 2`, `string 1 · steps`). The **filter box** matches field names, docs and file
+names (`noise_width hit`) and opens what it finds. Array indices are shown 1-based, as the converters say them.
+
+- **unset** (sound effects): a key that may be absent from the TOML (a step's `duty`, `pitch`, `noise_*`)
+  has an "unset" checkbox. Checked, the ROM gets the "keep the running value" sentinel and **Save deletes
+  the key**; unchecking sets a real value, and saving adds the key back.
+- **Step count** (`step`, per effect): the number of steps played. Raise it and new step rows appear, with
+  empty-step defaults (1 frame, nothing set); fill in what you want and Save appends the `[[step]]` tables
+  to the effect file, writing only the keys you set. Lowering it hides the extra steps; Save then removes
+  them from the file. Trigger keys (envelope, length, sweep) only count on a step that sets `volume`.
+- **Pitch** is a raw period. Notes written as `"A4"` stay as written until you move that slider; then
+  the file holds the number (the comment stays).
+- Before writing, the lab runs the real converter over the result. If it would reject the file (for example
+  you unset `volume` on a step that still has an envelope), nothing is written and the converter's message
+  appears under the filter box.
+- Effects are saved to the file the build uses: `assets/sfx/<name>_genplaceholder.toml` while it is
+  Claude's placeholder. Tuning one edits the placeholder in place; to make it yours, *Save As* without the
+  suffix (ADR 0007) and rebuild so the lab edits that file.
+
 ## Press graph and latency
 
 Every press the ROM judges is plotted (newest at the right) as its frame error from the beat slot: above 0
@@ -115,7 +140,8 @@ $(GEN)/combos.lab.json: data/combos.toml tools/gbtools/combos.py
 	$(PYTOOLS) gbtools.combos $< $(GEN)
 ```
 
-`tuning.lab.json` is written by `tools/gbtools/tuning.py` from the `[min..max] doc` comment on each param.
+The descriptor extensions (`source`, `none`, `step`, `array_length`, `absent`, `layout`) are specified in
+ADR 0008. `tuning.lab.json` is written by `tools/gbtools/tuning.py` from the `[min..max] doc` comment on each param.
 
 ## Safety and limits
 

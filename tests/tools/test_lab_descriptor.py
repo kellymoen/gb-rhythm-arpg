@@ -182,13 +182,13 @@ def test_save_adds_absent_slots_padding_arrays_with_the_default(tmp_path):
 def test_save_errors_name_file_and_field(tmp_path):
     f = tmp_path / "t.toml"
     f.write_text(TOML)
-    ghost = Field("t:g", ("timing", "ghost"), 0, "u8", 0, 0, 9)
-    with pytest.raises(ConvertError, match=r"t\.toml: 'timing\.ghost' not found"):
-        save_values(f, [(ghost, 1)])
     bad = Field("t:g", ("nope", "x"), 0, "u8", 0, 0, 9)
-    with pytest.raises(ConvertError, match="not found"):
+    with pytest.raises(ConvertError, match=r"t\.toml: no \[nope\.x\]: 'nope' not found"):
         save_values(f, [(bad, 1)])
     assert f.read_text() == TOML  # nothing half-written
+    ghost = Field("t:g", ("timing", "ghost"), 0, "u8", 0, 0, 9)
+    assert save_values(f, [(ghost, 0)]) == 0  # a key the file leaves out, still at its default: nothing to do
+    assert save_values(f, [(ghost, 1)]) == 1 and "ghost = 1" in f.read_text()  # changed: added
     with pytest.raises(ConvertError, match="cannot read"):
         save_values(tmp_path / "missing.toml", [(ghost, 1)])
 
@@ -374,3 +374,237 @@ def test_press_log_reader_handles_wrap_and_overrun():
 def test_press_log_reader_without_symbols_is_empty():
     rd = PressLogReader({}, FakeMem().read)
     assert not rd.available and rd.poll(0) == []
+
+
+# ---- descriptor extensions: source, none, step, array_length, layout (ADR 0008) -----------------
+import shutil  # noqa: E402
+
+from gbtools import sfx  # noqa: E402
+from lab.descriptor import synthesize  # noqa: E402
+
+
+def test_fields_of_different_sources_may_share_a_path(tmp_path):
+    p = descriptor(tmp_path, [
+        fld(("priority",), source="assets/sfx/a.toml"),
+        fld(("priority",), source="assets/sfx/b.toml", offset=4),
+    ])
+    a, b = load_table(p).fields
+    assert (a.source, b.source) == ("assets/sfx/a.toml", "assets/sfx/b.toml")
+    assert a.id != b.id and a.id == "demo:assets/sfx/a.toml:priority"
+
+
+def test_same_source_and_path_twice_is_an_error(tmp_path):
+    p = descriptor(tmp_path, [fld(source="x.toml"), fld(source="x.toml", offset=1)])
+    with pytest.raises(ConvertError, match="appears twice"):
+        load_table(p)
+    p = descriptor(tmp_path, [fld(), fld(offset=1)])  # no per-field source: hint at adding one
+    with pytest.raises(ConvertError, match="need their own 'source'"):
+        load_table(p)
+
+
+def test_fields_without_a_source_use_the_tables_and_keep_the_plain_id(tmp_path):
+    (f,) = load_table(descriptor(tmp_path, [fld()])).fields
+    assert f.source == "data/demo.toml" and f.id == "demo:a.b"
+
+
+def test_none_sentinel_is_writable_and_validated(tmp_path):
+    t = load_table(descriptor(tmp_path, [
+        fld(("p",), type="u16", default=65535, min=0, max=2047, none=65535),
+        fld(("q",), default=3, min=0, max=15, none=255, step=8),
+    ]))
+    p, q = t.fields
+    assert p.encode(65535) == b"\xff\xff" and p.decode(b"\xff\xff") == 65535 and p.default == p.none
+    assert q.encode(255) == b"\xff" and q.encode(3) == b"\x03" and q.step == 8
+    with pytest.raises(ValueError, match="outside its range"):
+        q.encode(100)  # the sentinel is the only value outside the range
+
+
+@pytest.mark.parametrize(
+    "field, message",
+    [
+        (fld(none=5), "'none' = 5 must lie outside the range [0..9]"),
+        (fld(none=300), "fit in u8"),
+        (fld(none=True), "'none' must be an integer"),
+        (fld(type="enum", values={"A": 1}, none=255), "not valid on enum fields"),
+        (fld(step=0), "'step' must be a positive integer"),
+        (fld(array_length=True, path=["step", 0]), "'array_length' belongs on a numeric field"),
+        (fld(source=""), "'source' must be the path"),
+    ],
+)
+def test_extension_errors_name_file_and_field(tmp_path, field, message):
+    p = descriptor(tmp_path, [field])
+    with pytest.raises(ConvertError) as e:
+        load_table(p)
+    assert str(p) in str(e.value) and message in str(e.value)
+
+
+def test_layout_must_be_an_object_and_is_kept(tmp_path):
+    assert load_table(descriptor(tmp_path, [fld()], layout={"effect_size": 196})).layout == {"effect_size": 196}
+    with pytest.raises(ConvertError, match="'layout' must be an object"):
+        load_table(descriptor(tmp_path, [fld()], layout=[1]))
+
+
+def steps_descriptor(tmp_path, count=1, layout=True):
+    fields = [{"source": "a.toml", "path": ["step"], "offset": 2, "type": "u8", "default": count, "min": 1,
+               "max": 4, "array_length": True}]
+    for n in range(count):
+        base = 4 + 6 * n
+        fields += [
+            {"source": "a.toml", "path": ["step", n, "frames"], "offset": base, "type": "u8", "default": 2,
+             "min": 1, "max": 255},
+            {"source": "a.toml", "path": ["step", n, "volume"], "offset": base + 1, "type": "u8", "default": 15,
+             "min": 0, "max": 15, "none": 255},
+        ]
+    return load_table(descriptor(tmp_path, fields, **({"layout": {"step_size": 6}} if layout else {})))
+
+
+def test_slots_past_the_listed_steps_are_synthesised_from_step_zero(tmp_path):
+    t = steps_descriptor(tmp_path, count=1)
+    synth = [f for f in t.fields if f.synth]
+    assert [f.path for f in synth] == [("step", n, k) for n in (1, 2, 3) for k in ("frames", "volume")]
+    frames, volume = synth[0], synth[1]
+    assert (frames.offset, volume.offset, synth[2].offset) == (10, 11, 16)  # the layout's step_size stride
+    assert (frames.default, volume.default, volume.none) == (1, 255, 255) and frames.absent and volume.absent
+    assert frames.id == "demo:a.toml:step.1.frames"
+
+
+def test_no_synthesis_without_a_step_size_or_when_all_slots_are_listed(tmp_path):
+    assert not any(f.synth for f in steps_descriptor(tmp_path, count=1, layout=False).fields)
+    assert not any(f.synth for f in steps_descriptor(tmp_path, count=4).fields)
+    t = steps_descriptor(tmp_path, count=2)
+    synthesize(t)  # idempotent: nothing left to add
+    assert len([f for f in t.fields if f.synth]) == 4
+
+
+# ---- saving: none, array_length, pitch ------------------------------------------------------------
+EFFECT = """channel = "P1"
+priority = 5
+
+[[step]]  # the sting
+frames = 2
+volume = 15
+duty = 1
+pitch = "A4"  # a note name
+sweep_pace = 2
+
+[[step]]
+frames = 3
+pitch = 900
+duty = 3
+"""
+SFX_SRC = Path(__file__).resolve().parents[2] / "assets/sfx"
+
+
+def sfx_fields(tmp_path, effect_text=EFFECT, name="demo"):
+    """The real converter's descriptor for one effect file, and the file."""
+    f = tmp_path / f"{name}.toml"
+    f.write_text(effect_text)
+    sfx.main([str(tmp_path / "gen"), str(f)])
+    # the converter records the source as given on its command line
+    return f, load_table(tmp_path / "gen/sfx.lab.json")
+
+
+def edit(t, f, **by_path):
+    """[(field, value)] from {"step.1.duty": 2, ...}."""
+    return [(next(x for x in t.fields if x.label == k.replace("__", ".")), v) for k, v in by_path.items()]
+
+
+def test_unset_deletes_the_key_and_a_real_value_adds_it_back(tmp_path):
+    f, t = sfx_fields(tmp_path)
+    duty = t.find(("step", 1, "duty"))
+    assert save_values(f, [(duty, duty.none)]) == 1
+    assert "duty = 3" not in f.read_text() and f.read_text().count("duty") == 1  # step 0's stays
+    assert save_values(f, [(duty, duty.none)]) == 0  # already unset: nothing to do
+    assert save_values(f, [(duty, 2)]) == 1
+    assert f.read_text().rstrip().endswith("duty = 2")
+    sfx.load_effect(f)  # still a valid effect
+
+
+def test_pitch_saves_as_a_number_even_where_the_file_had_a_note_name(tmp_path):
+    f, t = sfx_fields(tmp_path)
+    pitch = t.find(("step", 0, "pitch"))
+    assert save_values(f, [(pitch, 1800)]) == 1
+    assert "pitch = 1800  # a note name" in f.read_text()  # the comment survives
+
+
+def test_raising_the_step_count_appends_empty_step_tables(tmp_path):
+    f, t = sfx_fields(tmp_path)
+    count = t.find(("step",))
+    assert count.array_length and count.default == 2
+    assert save_values(f, [(count, 4)]) == 1
+    assert f.read_text().count("[[step]]") == 4
+    assert len(sfx.load_effect(f).steps) == 4  # empty steps are valid: they play 1 frame and change nothing
+
+
+def test_new_steps_get_the_keys_the_author_set_and_only_those(tmp_path):
+    f, t = sfx_fields(tmp_path)
+    by = {x.label: x for x in t.fields}
+    assert by["step.2.frames"].synth and by["step.2.frames"].absent
+    edits = [(by["step"], 4), (by["step.2.frames"], 6), (by["step.2.volume"], 9), (by["step.2.env_pace"], 3),
+             (by["step.2.pitch"], 1000), (by["step.3.frames"], by["step.3.frames"].default)]
+    assert save_values(f, edits, validate=sfx.load_effect) == 5
+    text = f.read_text()
+    assert text.count("[[step]]") == 4
+    e = sfx.load_effect(f)
+    assert len(e.steps) == 4
+    assert e.steps[2][:2] == bytes([6, 9]) and e.steps[2][3] == 3  # frames, volume, env_pace
+    assert e.steps[3][0] == 1  # step 4 kept the empty-step default
+
+
+def test_lowering_the_step_count_drops_the_tail_and_ignores_its_edits(tmp_path):
+    f, t = sfx_fields(tmp_path)
+    by = {x.label: x for x in t.fields}
+    assert save_values(f, [(by["step"], 1), (by["step.1.duty"], 0)]) == 1
+    assert f.read_text().count("[[step]]") == 1 and "duty = 3" not in f.read_text()
+    sfx.load_effect(f)
+
+
+def test_an_edit_in_an_element_the_file_lacks_is_an_error_unless_untouched(tmp_path):
+    f, t = sfx_fields(tmp_path)
+    by = {x.label: x for x in t.fields}
+    frames = by["step.2.frames"]
+    assert save_values(f, [(frames, frames.default)]) == 0  # untouched: fine
+    with pytest.raises(ConvertError, match="raise the count that covers it"):
+        save_values(f, [(frames, 5)])
+
+
+def test_save_refuses_a_file_the_converter_would_reject(tmp_path):
+    f, t = sfx_fields(tmp_path)
+    before = f.read_text()
+    vol = t.find(("step", 0, "volume"))
+    with pytest.raises(ConvertError) as e:  # unset volume while the step still has trigger keys
+        save_values(f, [(vol, vol.none)], validate=sfx.load_effect)
+    assert str(f) in str(e.value) and "not saved" in str(e.value) and "only takes effect" in str(e.value)
+    assert f.read_text() == before
+    assert [p.name for p in tmp_path.iterdir() if p.name.startswith(".lab-check")] == []  # cleaned up
+
+
+def test_every_placeholder_effect_still_converts_after_its_step_count_is_raised(tmp_path):
+    """Callers (Machine.save) pass only fields whose value differs from the default; raising the count
+    of each real placeholder effect must give a file the converter accepts."""
+    files = sorted(SFX_SRC.glob("*.toml"))
+    assert files
+    for src in files:
+        f = tmp_path / src.name
+        shutil.copy(src, f)
+        sfx.main([str(tmp_path / "gen"), str(f)])
+        t = load_table(tmp_path / "gen/sfx.lab.json")
+        before = f.read_text()
+        assert save_values(f, []) == 0 and f.read_text() == before
+        count = t.find(("step",))
+        assert save_values(f, [(count, min(count.default + 2, 16))], validate=sfx.load_effect) == 1
+        assert len(sfx.load_effect(f).steps) == min(count.default + 2, 16)
+
+
+def test_synthesised_enum_slots_default_to_the_zero_value(tmp_path):
+    fields = [
+        {"source": "a.toml", "path": ["step"], "offset": 2, "type": "u8", "default": 1, "min": 1, "max": 3,
+         "array_length": True},
+        {"source": "a.toml", "path": ["step", 0, "dir"], "offset": 4, "type": "enum", "default": "down",
+         "values": {"up": 0, "down": 1}},
+        {"source": "a.toml", "path": ["step", 0, "sweep"], "offset": 5, "type": "enum", "default": "x",
+         "values": {"x": 7, "y": 3}},
+    ]
+    t = load_table(descriptor(tmp_path, fields, layout={"step_size": 4}))
+    d1, s1 = [f for f in t.fields if f.synth][:2]
+    assert (d1.default, s1.default) == (0, 3)  # 0 where the enum has it, else its smallest value

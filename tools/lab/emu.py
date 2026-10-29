@@ -22,6 +22,15 @@ from .replay import (
 from .symbols import load_symbols
 from .tomlio import save_values
 
+def _validators() -> dict:
+    """Converters that can vet a candidate TOML before the lab writes it (name = table name)."""
+    from gbtools import combos, sfx
+
+    return {"sfx": sfx.load_effect, "combos": combos.parse}
+
+
+VALIDATORS = _validators()
+
 # Where the graph reads the grading windows and latency from (ADR 0004 names); fields may be absent.
 WINDOW_PATHS = {"perfect": ("timing", "perfect_window"), "good": ("timing", "good_window"), "latency": ("timing", "latency_offset")}
 
@@ -57,6 +66,14 @@ class Machine:
             for f in t.fields:
                 self.fields[f.id] = (t, f)
 
+        self._arrays: dict[str, tuple[Field, int]] = {}  # field id -> (its array_length field, element index)
+        self._hwm: dict[str, int] = {}  # array_length field id -> highest length seen
+        self._array_fields = [a for _, a in self.fields.values() if a.array_length]
+        for _, f in self.fields.values():
+            for arr in self._array_fields:
+                n = len(arr.path)
+                if arr.source == f.source and f.path[:n] == arr.path and len(f.path) > n and isinstance(f.path[n], int):
+                    self._arrays[f.id] = (arr, f.path[n])
         self.audio = AudioOut(48000, audio_frames) if audio else None
         if self.audio and not self.audio.ok:
             self.warnings.append("no audio output device could be opened; running muted")
@@ -119,8 +136,26 @@ class Machine:
     def read_field(self, table: Table, f: Field) -> int:
         return f.decode(self.mem.read(self.addr(f, table), f.size))
 
+    # Array elements (e.g. an effect's steps) are governed by an `array_length` field. Fields of
+    # elements past the current length are hidden by the UI, and elements the descriptor does not
+    # list (synthesised, see descriptor.synthesize) are only offered once the length has reached them.
+    def _array_of(self, fid: str):
+        return self._arrays.get(fid)
+
+    def listed(self) -> list[tuple[Table, Field]]:
+        """Fields the UI knows about: every listed field, plus synthesised slots up to the high-water length."""
+        for arr in self._array_fields:
+            self._hwm[arr.id] = max(self._hwm.get(arr.id, 0), self.read_field(*self.fields[arr.id]))
+        return [(t, f) for t, f in self.fields.values()
+                if not (f.synth and (a := self._arrays.get(f.id)) and a[1] >= self._hwm[a[0].id])]
+
+    def in_use(self, f: Field) -> bool:
+        """False for a field of an array element past the array's current length."""
+        a = self._arrays.get(f.id)
+        return a is None or a[1] < self.read_field(*self.fields[a[0].id])
+
     def values(self) -> dict[str, int]:
-        return {fid: self.read_field(t, f) for fid, (t, f) in self.fields.items()}
+        return {f.id: self.read_field(t, f) for t, f in self.listed()}
 
     def write_field(self, table: Table, f: Field, value: int, record: bool = True) -> None:
         self.mem.write(self.addr(f, table), f.encode(value))
@@ -133,32 +168,65 @@ class Machine:
         table, f = self.fields[fid]
         if self.player:
             raise RuntimeError("a replay is playing; changing values would break it. Cancel the replay first")
+        old = self.read_field(table, f)
         self.write_field(table, f, value)
+        if f.array_length and value > old:
+            self._init_slots(table, f, old, value)
         return self.read_field(table, f)
 
-    def reset(self, table_name: str | None = None) -> int:
+    def _init_slots(self, table: Table, arr: Field, old: int, new: int) -> None:
+        """Raising an array's length exposes slots that may never have been written (all zero bytes):
+        give those the empty-slot defaults so the ROM does not play frames = 0."""
+        n, stride = len(arr.path), table.layout.get("step_size", 0)
+        self._hwm[arr.id] = max(self._hwm.get(arr.id, 0), new)
+        for k in range(old, new):
+            slot = [f for f in table.fields if f.source == arr.source and f.path[: n] == arr.path
+                    and len(f.path) > n and f.path[n] == k]
+            if not slot or not all(f.synth for f in slot):
+                continue
+            base = min(f.offset for f in slot)
+            if any(self.mem.read(self.symbols[table.symbol] + base, stride)):
+                continue
+            for f in slot:
+                self.write_field(table, f, f.default)
+
+    def _select(self, table_name, source):
+        return [(t, f) for t, f in self.listed() if table_name in (None, t.name) and source in (None, f.source)]
+
+    def reset(self, table_name: str | None = None, source: str | None = None) -> int:
         if self.player:
             raise RuntimeError("a replay is playing; cancel it first")
         n = 0
-        for t, f in self.fields.values():
-            if table_name in (None, t.name) and self.read_field(t, f) != f.default:
+        for t, f in self._select(table_name, source):
+            if self.read_field(t, f) != f.default:
                 self.write_field(t, f, f.default)
                 n += 1
         return n
 
-    def save(self, table_name: str | None = None) -> dict:
-        """Write current values into each source TOML; the saved values become the new defaults."""
-        out = {}
+    def save(self, table_name: str | None = None, source: str | None = None) -> dict:
+        """Write changed values into their source TOMLs; the saved values become the new defaults.
+
+        Returns {"saved": {table: values changed}, "errors": [messages]}: a file the table's converter
+        would reject is not written (the error says why) and the others still are."""
+        saved: dict[str, int] = {}
+        errors: list[str] = []
         for t in self.tables:
             if table_name not in (None, t.name):
                 continue
-            edits = [(f, self.read_field(t, f)) for f in t.fields if f.id in self.fields]
-            if not edits:
-                continue
-            out[t.name] = save_values(self.repo / t.source, edits)
-            for f, v in edits:
-                f.default = v
-        return out
+            by_source: dict[str, list[tuple[Field, int]]] = {}
+            for tt, f in self._select(t.name, source):
+                v = self.read_field(tt, f)
+                if v != f.default and self.in_use(f):
+                    by_source.setdefault(f.source, []).append((f, v))
+            for src, edits in by_source.items():
+                try:
+                    saved[t.name] = saved.get(t.name, 0) + save_values(self.repo / src, edits, VALIDATORS.get(t.name))
+                except ConvertError as e:
+                    errors.append(str(e))
+                    continue
+                for f, v in edits:
+                    f.default = v
+        return {"saved": saved, "errors": errors}
 
     def windows(self) -> dict:
         vals = {}
