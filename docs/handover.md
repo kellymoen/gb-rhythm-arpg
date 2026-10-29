@@ -21,6 +21,9 @@ Rewritten by the orchestrator at the end of every session, for the next one. Rea
 - `BUDGET_STREAM_BYTES` is a guess until the sprite runtime measures VRAM copy cost.
 
 ## Gotchas
+- `Agent` with `isolation: "worktree"` cuts the worktree from `main`, not from the milestone branch.
+  Instead, have each package agent run `git worktree add .claude/worktrees/<pkg> -b <pkg> <milestone
+  branch>` itself and work only there.
 - Bank 0 holds about 8.6 KB of free space as of Wave 0; bank new code and data.
 - `UPDATE_GOLDEN=1` re-records every golden that a test asserts. If two tests share a golden name, the
   last one wins, so give each screen its own name.

@@ -48,7 +48,9 @@ typedef struct {
      * enum. A missing tag is NULL (the converter only allows that for actions marked optional). */
     const sprite_anim_t *const *anims;
     uint8_t action_count;
-    uint8_t bank;               /* ROM bank holding everything above */
+    uint8_t bank;               /* ROM bank holding this struct and `anims`. The anims themselves may
+                                 * span several banks: the generated sprite_<name>_anim_bank[] gives
+                                 * each one's bank (see the generated header) */
 } sprite_t;
 
 #endif

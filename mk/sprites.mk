@@ -3,8 +3,6 @@
 #   -> $(GEN)/sprite_<name>.{h,c} + spritebank_<name>_<k>.c   (tools/gbtools/sprites.py)
 # Included from the Makefile (after the asset_names/asset_path definitions); see docs/sprites.md.
 
-.DEFAULT_GOAL := all  # this file's first rule must not become the default goal
-
 SPRITE_NAMES := $(call asset_names,assets/sprites,.aseprite)
 SPRITE_FILES := $(foreach n,$(SPRITE_NAMES),$(call asset_path,assets/sprites,$(n),.aseprite))
 SPRITE_BANKS := 1 2 3  # keep in step with BANK_FILES in tools/gbtools/sprites.py

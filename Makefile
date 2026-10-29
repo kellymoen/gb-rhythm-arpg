@@ -69,6 +69,7 @@ HOST_GEN    := $(GEN)/tuning.c
 
 # Work packages add their generated sources and rules in mk/<area>.mk (append to GEN_SRC, GEN_HDR,
 # HOST_GEN and ASSETS) instead of editing this file.
+.DEFAULT_GOAL := all
 include $(sort $(wildcard mk/*.mk))
 
 OBJS := $(patsubst %.c,$(OBJ)/%.o,$(SRC)) $(patsubst $(GEN)/%.c,$(OBJ)/gen/%.o,$(GEN_SRC))

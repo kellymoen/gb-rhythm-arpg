@@ -13,6 +13,8 @@ the author confirms or overturns it; then move it to "Settled" with the date, or
 | 4 | M2 | Training dummy | A stationary dummy with a hurtbox, hit flash and hitstop as the M2 target | `src/scenes/combatflat.c` |
 | 5 | M2 | Combat music | Placeholder ~8-bar loop with a `HITS` track and a tempo change 120→140 at bar 5 | `assets/music/combat_genplaceholder.mid` |
 | 6 | M2 | Musical-hit pitch | Hit N of the current string plays pitch N of the song's HITS set; resets when the string ends (chosen by the author 2026-10-29, values still to tune) | `src/audio/sfx.h` `sfx_hit_step` |
+| 8 | M2 | Sprite tag data (asset contract) | `hit=<k>` is 1-based within the tag. `dur=<n>/<d>` is a fraction of a whole note: `1/4` = 1 beat, `dur=1` = 4 beats; `loop` marks looping tags; `optional` allows missing facings. Hitboxes come from a `hitbox:<tag>` slice (or per-frame `hitbox` keys) and exist only on the hit frame | `docs/sprites.md` |
+| 9 | M2 | Placeholder anim timings | Attacks 1/8 (finisher and heavies 1/4), idle 1/2 loop, walk 1/4 loop, dodge and hurt 1/8 | `assets/sprites/player_genplaceholder.aseprite` |
 | 7 | M2 | Hitstop / flash / slow-mo amounts | Hitstop 8/5/2 ticks (PERFECT/GOOD/OFFBEAT), flash 6 ticks, slow-mo 2 beats at 1/2 enemy rate | `data/tuning.toml` |
 
 ## Settled
