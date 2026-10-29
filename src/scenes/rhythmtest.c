@@ -7,7 +7,7 @@
 #include "gb/input.h"
 #include "gb/text.h"
 #include "music.h"
-#include "scenes/rhythmtest.h"
+#include "scenes/scene.h"
 #include "tuning.h"
 
 #define ROW_TIME 1
@@ -21,6 +21,8 @@
 static const char *const grade_names[] = { "OFFBEAT", "GOOD   ", "PERFECT" };
 static uint16_t counts[3];
 static uint8_t count_dirty; /* bit per grade; drawn a frame later to spread VRAM writes */
+static uint16_t bar;
+static uint8_t beat_in_bar;
 
 static void draw_help(void)
 {
@@ -30,6 +32,7 @@ static void draw_help(void)
         text_clear(0, y, 20);
     text_print(1, ROW_BOTTOM, "PRESS A OR B");
     text_print(1, ROW_BOTTOM + 1, "ON THE BEAT");
+    text_print(1, ROW_BOTTOM + 6, "START: BACK");
 #ifdef DEBUG
     text_print(1, ROW_BOTTOM + 3, "SELECT: TUNING");
 #endif
@@ -69,9 +72,6 @@ static void show_press(const press_t *p)
 /* Counted incrementally once per beat change, avoiding a 16-bit divide by beats_per_bar. */
 static void draw_time(void)
 {
-    static uint16_t bar = 1;
-    static uint8_t beat_in_bar;
-
     if (++beat_in_bar > music_beats_per_bar) {
         beat_in_bar = 1;
         bar++;
@@ -80,7 +80,7 @@ static void draw_time(void)
     text_print_int(18, ROW_TIME, beat_in_bar, 1, 0);
 }
 
-void rhythmtest_run(void)
+scene_t rhythmtest_run(void)
 {
     press_t press;
     beat_clock_t now;
@@ -90,9 +90,16 @@ void rhythmtest_run(void)
     uint8_t menu = 0;
 #endif
 
-    music_play(BANK(song_rhythmtest), &song_rhythmtest);
+    scene_begin();
+    counts[0] = counts[1] = counts[2] = 0;
+    count_dirty = 0;
+    bar = 1;
+    beat_in_bar = 0;
+    hud_init();
+    music_play(BANK(song_rhythmtest), &song_rhythmtest); /* the clock waits for VBlank, i.e. scene_show */
     draw_labels();
     draw_help();
+    scene_show();
 
     while (1) {
         vsync();
@@ -134,10 +141,12 @@ void rhythmtest_run(void)
                 debugmenu_draw(ROW_BOTTOM);
             else
                 draw_help();
-        } else if (menu)
+        } else if (menu) {
             debugmenu_update(edges, ROW_BOTTOM);
-#else
-        (void)edges;
+            continue; /* Start dumps values while the menu is open */
+        }
 #endif
+        if (edges & J_START)
+            return SCENE_MENU;
     }
 }

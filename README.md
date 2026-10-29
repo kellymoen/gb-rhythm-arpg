@@ -13,7 +13,12 @@ Isometric rhythm-combat action RPG for Game Boy / Game Boy Color. See `CLAUDE.md
    *Emulicious Debugger* extension.
 3. **Logic Pro audition plugins** — RetroPlug (https://github.com/tommitytom/RetroPlug/releases) and/or
    PAPU (https://socalabs.com/synths/papu/).
-4. **Flashcart** — EZ-Flash Junior or EverDrive GB X7 for testing on your Game Boy Color.
+4. **Flashcart** (optional) — the slice is tuned in SameBoy (ADR 0008); hardware testing comes later.
+
+## Replacing placeholders
+Everything Claude made is named `<name>_genplaceholder.<ext>`. Open it, make it yours, and **Save As**
+`<name>.<ext>` in the same folder; the build uses yours from then on. `make` prints
+`assets: yours N/M`, and `make release` refuses to build while any placeholder would ship.
 
 ## Composing in Logic Pro
 Export each song as a MIDI file into `assets/music/<song_name>.mid` (lower_snake_case), then run `make`. To hear
@@ -30,7 +35,8 @@ played, the build stops with a message naming the track, bar and beat.
 | `NOISE` | noise    | —     | drum map: each MIDI note picks a `[[drum]]`; note lengths are ignored (drums decay) |
 | `HITS`  | (not played) | C2–B7 | the pitches combo hits may use, up to 16; its program change picks the hit sound |
 
-**Per-track controls:** program change = instrument from `assets/music/instruments.toml` (program 0 if none);
+**Per-track controls:** program change = instrument from `assets/music/instruments.toml` (until you save your own,
+the build uses `instruments_genplaceholder.toml`; program 0 if none);
 velocity = volume; **CC12** = pulse duty (0–31 12.5%, 32–63 25%, 64–95 50%, 96–127 75%); **CC1** (mod wheel) =
 vibrato depth; **pitch bend** = ±2 semitones. Other CCs are ignored. Two notes starting together on one track is
 an error (the channels are monophonic).

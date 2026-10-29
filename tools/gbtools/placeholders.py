@@ -2,7 +2,9 @@
 
     python -m gbtools.placeholders [--force] {song,font,hud,all}
 
-Never run by the build: it refuses to overwrite an existing file unless --force is given.
+Every file is written as `<name>_genplaceholder.<ext>` (ADR 0007); the author replaces it by saving
+`<name>.<ext>` beside it. Never run by the build: it refuses to overwrite an existing placeholder
+unless --force is given, and never writes one the author's file has already replaced.
 """
 
 import argparse
@@ -11,6 +13,8 @@ from pathlib import Path
 
 import mido
 from PIL import Image
+
+from gbtools.assets import PLACEHOLDER
 
 REPO = Path(__file__).resolve().parents[2]
 SHADES = [(232, 240, 216), (152, 184, 120), (72, 104, 72), (16, 32, 32)]
@@ -74,7 +78,13 @@ def _indexed(w: int, h: int) -> Image.Image:
     return img
 
 
-def _write(path: Path, force: bool, save) -> None:
+def _write(name: str, force: bool, save) -> None:
+    """`name` is the asset path without the suffix, e.g. "assets/ui/font.png"."""
+    mine = REPO / name
+    path = mine.with_name(mine.stem + PLACEHOLDER + mine.suffix)
+    if mine.exists():
+        print(f"skip {path.relative_to(REPO)} (replaced by your {mine.relative_to(REPO)})")
+        return
     if path.exists() and not force:
         print(f"skip {path.relative_to(REPO)} (exists; use --force to overwrite)")
         return
@@ -93,7 +103,7 @@ def font(force: bool) -> None:
             for x, c in enumerate(line):
                 if c == "#":
                     img.putpixel((ox + x, oy + y), 3)
-    _write(REPO / "assets/ui/font.png", force, img.save)
+    _write("assets/ui/font.png", force, img.save)
 
 
 def hud(force: bool) -> None:
@@ -108,7 +118,7 @@ def hud(force: bool) -> None:
     for y in range(0, 8):
         bar.putpixel((11, y), 3)
         bar.putpixel((12, y), 3)
-    _write(REPO / "assets/ui/hud_bar.png", force, bar.save)
+    _write("assets/ui/hud_bar.png", force, bar.save)
 
     spr = _indexed(16, 16)
     for (cx, r) in ((3, 1), (11, 3)):  # pip centre x and radius, both centred on row 3
@@ -117,7 +127,7 @@ def hud(force: bool) -> None:
                 d = abs(x - cx) + abs(y - 3)
                 if d <= r:
                     spr.putpixel((x, y), 3 if d < r else 2)
-    _write(REPO / "assets/ui/hud_sprites.png", force, spr.save)
+    _write("assets/ui/hud_sprites.png", force, spr.save)
 
 
 def song(force: bool) -> None:
@@ -167,7 +177,7 @@ def song(force: bool) -> None:
     track("WAVE", 0, bass)
     track("NOISE", None, drums)
     track("HITS", 2, [(i * eighth, eighth, n, 100) for i, n in enumerate([69, 72, 74, 76, 79, 81])])
-    _write(REPO / "assets/music/rhythmtest.mid", force, lambda p: mid.save(p))
+    _write("assets/music/rhythmtest.mid", force, lambda p: mid.save(p))
 
 
 def main(argv: list[str]) -> int:

@@ -1,21 +1,35 @@
 # Feel parameters (ADR 0004). Integers only; each becomes a field `<table>_<key>` of `tuning_t`.
-# DEBUG=1 builds can change these live from the debug menu.
+# DEBUG=1 builds can change these live from the debug menu and the feel lab (ADR 0008).
+# Each comment starts with the allowed range `[min..max]`; the feel lab uses it for its sliders.
+# Combat durations are in song ticks (48 per beat), never frames, so they scale with the tempo.
 
 [timing]
-perfect_window = 3   # +/- frames around a step slot that grade PERFECT
-good_window = 6      # +/- frames that grade GOOD; beyond is OFFBEAT
-steps_per_beat = 2   # step slots per beat (2 = 8th notes)
-latency_offset = 0   # frames subtracted from input time before grading
+perfect_window = 3   # [0..10] +/- frames around a step slot that grade PERFECT
+good_window = 6      # [0..20] +/- frames that grade GOOD; beyond is OFFBEAT
+steps_per_beat = 2   # [1..8] step slots per beat (2 = 8th notes); must divide 48
+latency_offset = 0   # [-15..15] frames subtracted from input time before grading
 
 [input]
-dodge_grace = 2      # max frames between A and B that still count as A+B
+dodge_grace = 2      # [0..6] max frames between A and B that still count as A+B
 
 [combat]
-lunge_px = 12        # soft-lock lunge distance
+lunge_px = 12        # [0..32] soft-lock lunge distance
+string_grace = 1     # [0..4] unwritten empty step slots before a combo string breaks
+offbeat_damage_shift = 1  # [0..4] OFFBEAT steps deal damage >> this (1 = half)
+
+[hitstop]
+perfect_ticks = 8    # [0..24] freeze on a PERFECT hit, in song ticks
+good_ticks = 5       # [0..24] freeze on a GOOD hit
+offbeat_ticks = 2    # [0..24] freeze on an OFFBEAT hit
+
+[slowmo]
+beats = 2            # [0..8] how long a perfect dodge's slow-mo lasts
+enemy_divider = 2    # [1..8] enemies update once every this many frames during slow-mo
 
 [feedback]
-palette_pulse = 1    # 0 = off, 1 = bar downbeats, 2 = every beat
-hud_metronome = 1    # 1 = on (switches below too)
-hit_flash = 1
-grade_popups = 1
-musical_hits = 1     # A/B presses play the song's hit instrument
+palette_pulse = 1    # [0..2] 0 = off, 1 = bar downbeats, 2 = every beat
+hud_metronome = 1    # [0..1] 1 = on (switches below too)
+hit_flash = 1        # [0..1]
+hit_flash_ticks = 6  # [0..24] how long a hit target flashes
+grade_popups = 1     # [0..1]
+musical_hits = 1     # [0..1] on-beat A/B presses play the song's hit instrument

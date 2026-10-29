@@ -207,7 +207,7 @@ def test_instrument_errors(tmp_path):
 
 
 def test_repo_music_converts():
-    ins = music.load_instruments(REPO / "assets/music/instruments.toml")
-    for path in (REPO / "assets/music").glob("*.mid"):
+    ins = music.load_instruments(REPO / "assets/music/instruments_genplaceholder.toml")
+    for path in (REPO / "assets/music").glob("*_genplaceholder.mid"):
         song = music.convert_song(path, ins)
         assert all(s[-1] == music.EV_END for s in song.streams)

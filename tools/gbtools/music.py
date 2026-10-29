@@ -1,5 +1,10 @@
 """Convert Logic Pro MIDI exports (assets/music/*.mid) + instruments.toml into driver data (ADR 0005).
 
+    python -m gbtools.music <instruments.toml> <out_dir> <song.mid>...
+
+The Makefile passes the resolved songs (ADR 0007): `rhythmtest_genplaceholder.mid` and `rhythmtest.mid`
+are both the song `rhythmtest`.
+
 Outputs in <out_dir>: music.h (song declarations), music_common.c (note table, instruments, waves),
 and song_<name>.c per song (banked event streams). Byte layout: src/audio/song.h.
 """
@@ -12,6 +17,7 @@ from pathlib import Path
 
 import mido
 
+from gbtools.assets import asset_name
 from gbtools.errors import ConvertError
 
 FPS = 4194304 / 70224  # Game Boy frame rate, ~59.7275 Hz
@@ -321,9 +327,9 @@ def _frame(path, tl, name, events, loop_tick, end_tick, restore: list[bytes], of
 
 
 def convert_song(path: Path, ins: InstrumentSet) -> Song:
-    name = path.stem.lower()
+    name = asset_name(path)
     if not SONG_NAME.match(name):
-        raise ConvertError(path, f"song file name '{path.stem}' must be lower_snake_case (it becomes a C name)")
+        raise ConvertError(path, f"song file name '{name}' must be lower_snake_case (it becomes a C name)")
     try:
         mid = mido.MidiFile(path)
     except (OSError, ValueError, EOFError) as e:
@@ -439,13 +445,13 @@ def render_header(songs: list[Song]) -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 3:
-        print("usage: python -m gbtools.music <music_dir> <instruments.toml> <out_dir>", file=sys.stderr)
+    if len(argv) < 2:
+        print("usage: python -m gbtools.music <instruments.toml> <out_dir> <song.mid>...", file=sys.stderr)
         return 2
-    music_dir, ins_path, out_dir = map(Path, argv)
+    ins_path, out_dir = Path(argv[0]), Path(argv[1])
     try:
         ins = load_instruments(ins_path)
-        songs = [convert_song(p, ins) for p in sorted(music_dir.glob("*.mid"))]
+        songs = [convert_song(Path(p), ins) for p in argv[2:]]
     except ConvertError as e:
         print(e, file=sys.stderr)
         return 1

@@ -5,12 +5,18 @@
 All final art and music is authored by the user. Generated output (`build/gen/`) is never edited.
 
 - **Sprites:** one `.aseprite` per character. Tags are `<action>_<facing>`, with 5 drawn facings. Tag
-  user data sets beat timing and hit frame, e.g. `dur=1/8 hit=2`. Slices `pivot`, `hitbox` and `hurtbox`
+  user data sets beat timing and hit frame, e.g. `dur=1/8 hit=2`. `dur` is the musical length of the
+  **whole tag**; Aseprite's own frame durations set how that length is split between frames, so frames
+  are timed visually and the game scales them to the tempo (layout: `src/gb/spritedata.h`). Slices `pivot`, `hitbox` and `hurtbox`
   mark the feet, hitbox and hurtbox. Palettes come from `assets/palettes.aseprite`: 4 shades each,
   giving both a DMG shade and a CGB palette.
 - **Pipeline:** the build runs `aseprite -b` to export a sheet PNG plus JSON. Converters read only
   PNG + JSON, so they can be tested without Aseprite.
 - **Maps:** Tiled `.tmx` (see 0003). **Music:** `.mid` + `instruments.toml` (see 0005).
+- **Sound effects:** one TOML file per effect in `assets/sfx/`, written as register-level steps (channel,
+  priority, duty, envelope, pitch/sweep per step), so the feel lab can edit them live (0008).
+- **Names:** Claude's placeholders carry a `_genplaceholder` suffix and the author's files replace them
+  (0007).
 - **Gameplay data:** `data/*.toml` → generated C tables.
 - **Validation:** converters fail with readable errors naming the file, element and fix, e.g.
   `walk_ne frame 3: 5 colours in tile (8,16)`.
