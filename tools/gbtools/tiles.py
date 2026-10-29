@@ -25,13 +25,15 @@ def shades(img: Image.Image, path: Path) -> list[list[int]]:
         grid = [[px[x, y] for x in range(w)] for y in range(h)]
         bad = sorted({v for row in grid for v in row if v > 3})
         if bad:
-            raise ConvertError(path, f"uses palette indices {bad}; only indices 0-3 (4 shades) are allowed")
+            raise ConvertError(path, f"uses palette indices {bad}; only indices 0-3 (4 shades) are allowed, so "
+                                     f"repaint those pixels with the first four palette colours")
         return grid
     rgba = img.convert("RGBA")
     px = rgba.load()
     colours = {px[x, y][:3] for y in range(h) for x in range(w) if px[x, y][3] != 0}
     if len(colours) > 4:
-        raise ConvertError(path, f"has {len(colours)} colours; Game Boy tiles allow 4 shades")
+        raise ConvertError(path, f"has {len(colours)} colours; Game Boy tiles allow 4 shades, so reduce it to 4 "
+                                 f"colours (or save it as an indexed PNG using palette indices 0-3)")
     index = {c: round((255 - (0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2])) / 85) for c in colours}
     for shade in range(4):
         same = [c for c, s in index.items() if s == shade]
@@ -57,11 +59,12 @@ def convert(path: Path, sprite8x16: bool) -> list[bytes]:
     try:
         img = Image.open(path)
     except OSError as e:
-        raise ConvertError(path, f"cannot read PNG: {e}") from e
+        raise ConvertError(path, f"cannot read PNG: {e}; re-save it as a PNG") from e
     w, h = img.size
     step_h = 16 if sprite8x16 else 8
     if w % 8 or h % step_h:
-        raise ConvertError(path, f"is {w}x{h}; width must be a multiple of 8 and height of {step_h}")
+        raise ConvertError(path, f"is {w}x{h}; width must be a multiple of 8 and height of {step_h}, so resize "
+                                 f"the canvas")
     grid = shades(img, path)
     tiles = []
     for ty in range(0, h, step_h):

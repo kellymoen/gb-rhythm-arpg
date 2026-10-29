@@ -54,17 +54,21 @@ def run_aseprite(aseprite: str, source: Path, out_dir: Path) -> None:
     try:
         done = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired) as e:
-        raise ConvertError(source, f"could not run Aseprite ({aseprite}): {e}") from e
+        raise ConvertError(source, f"could not run Aseprite ({aseprite}): {e}; point ASEPRITE at the Aseprite "
+                                   f"executable, e.g. make ASEPRITE=/path/to/aseprite") from e
     if done.returncode != 0 or not png.exists() or not js.exists():
         raise ConvertError(source, f"Aseprite export failed (exit {done.returncode}): "
-                                   f"{(done.stderr or done.stdout).strip()}")
+                                   f"{(done.stderr or done.stdout).strip()}; open the file in Aseprite, fix what "
+                                   f"it reports and save it, then run make again")
     sha.write_text(source_hash(source) + "\n")
 
 
 def export(source: Path, out_dir: Path, aseprite: str | None, force: bool = False) -> str:
     """Make sure out_dir holds a fresh export of `source`. Returns "exported" or "up to date"."""
     if not source.is_file():
-        raise ConvertError(source, "does not exist")
+        raise ConvertError(source, "does not exist; check the path, or run `make placeholders` to recreate a "
+                                   "missing placeholder (the Makefile passes assets/sprites/<name>[_genplaceholder]"
+                                   ".aseprite)")
     fresh, reason = is_fresh(source, out_dir)
     if fresh and not force:
         for p in export_paths(source, out_dir):

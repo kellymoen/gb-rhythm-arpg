@@ -46,3 +46,10 @@ def label_problem(label: object, width: int) -> str | None:
         return (f"uses {', '.join(repr(c) for c in bad)}, which the font has no glyph for; use only "
                 f"A-Z, 0-9, space and {FONT_GLYPHS[37:]}")
     return None
+
+
+def suggest_ident(name: object) -> str:
+    """A lower_snake_case spelling of `name`, for error messages: `Big Swing` -> `big_swing`."""
+    text = re.sub(r"[^a-z0-9]+", "_", str(name).lower()).strip("_")
+    text = re.sub(r"^[0-9_]+", "", text)
+    return text or "name"

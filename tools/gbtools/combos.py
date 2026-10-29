@@ -21,7 +21,7 @@ from pathlib import Path
 
 from gbtools import labdesc
 from gbtools.errors import ConvertError
-from gbtools.names import IDENT, display_name, label_problem
+from gbtools.names import IDENT, display_name, label_problem, suggest_ident
 
 MAX_STEPS = 8
 MAX_STRINGS = 8  # src/core/combo.c tracks candidate strings in one byte
@@ -78,7 +78,8 @@ class Combos:
 def _tables(path: Path, doc: dict, key: str) -> list[dict]:
     value = doc.get(key, [])
     if not isinstance(value, list) or not all(isinstance(t, dict) for t in value):
-        raise ConvertError(path, f"'{key}' must be an array of [[{key}]] tables")
+        raise ConvertError(path, f"'{key}' must be an array of [[{key}]] tables; write each {key} as a "
+                                 f"[[{key}]] table (see the top of data/combos.toml)")
     if not value:
         raise ConvertError(path, f"no [[{key}]] tables; add at least one")
     return value
@@ -89,7 +90,8 @@ def _name(path: Path, kind: str, index: int, table: dict, seen: set[str]) -> str
     if name is None:
         raise ConvertError(path, f'{kind} {index + 1} has no name; add name = "<lower_snake_case>"')
     if not isinstance(name, str) or not IDENT.match(name):
-        raise ConvertError(path, f"{kind} name '{name}' must be lower_snake_case")
+        raise ConvertError(path, f"{kind} name '{name}' must be lower_snake_case; rename it, e.g. "
+                                 f"'{suggest_ident(name)}'")
     if name in RESERVED:
         raise ConvertError(path, f"{kind} name '{name}' is reserved; pick another")
     if name in seen:
@@ -111,9 +113,11 @@ def _int(path: Path, where: str, table: dict, key: str, bounds: tuple[int, int],
         return default
     value = table[key]
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ConvertError(path, f"{where}: {key} must be an integer in [{bounds[0]}..{bounds[1]}]")
+        raise ConvertError(path, f"{where}: {key} must be an integer in [{bounds[0]}..{bounds[1]}]; write it "
+                                 f"without quotes, e.g. {key} = {bounds[0]}")
     if not bounds[0] <= value <= bounds[1]:
-        raise ConvertError(path, f"{where}: {key} = {value} is out of range [{bounds[0]}..{bounds[1]}]")
+        raise ConvertError(path, f"{where}: {key} = {value} is out of range [{bounds[0]}..{bounds[1]}]; use a "
+                                 f"value from {bounds[0]} to {bounds[1]}")
     return value
 
 
@@ -134,14 +138,16 @@ def _parse_attacks(path: Path, tables: list[dict], anims: list[str], sfx: list[s
             raise ConvertError(path, f'{where}: missing anim; add anim = "<player animation, e.g. light1>"')
         if not isinstance(anim, str) or not IDENT.match(anim):
             raise ConvertError(
-                path, f"{where}: anim '{anim}' must be lower_snake_case (the action of an Aseprite tag)")
+                path, f"{where}: anim '{anim}' must be lower_snake_case (the action of an Aseprite tag); "
+                      f"use the tag's action, e.g. '{suggest_ident(anim)}'")
         damage = _int(path, where, t, "damage", DAMAGE)
         lunge = _int(path, where, t, "lunge", LUNGE, default=0)
         effect = t.get("sfx", "")
         if not isinstance(effect, str):
             raise ConvertError(path, f'{where}: sfx must be a sound effect name like "swing", or "" for none')
         if effect and not IDENT.match(effect):
-            raise ConvertError(path, f"{where}: sfx '{effect}' must be lower_snake_case (assets/sfx/<sfx>.toml)")
+            raise ConvertError(path, f"{where}: sfx '{effect}' must be lower_snake_case (assets/sfx/<sfx>.toml); "
+                                     f"use the effect's file name, e.g. '{suggest_ident(effect)}'")
         attacks.append(Attack(
             name, _index(anims, anim), damage, lunge, _index(sfx, effect) if effect else NONE, "sfx" in t))
     return attacks
@@ -253,7 +259,7 @@ def parse(path: Path) -> Combos:
     try:
         doc = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
-        raise ConvertError(path, f"invalid TOML: {e}") from e
+        raise ConvertError(path, f"invalid TOML: {e}; fix the syntax at that line") from e
     for key in doc:
         if key not in ("attack", "string"):
             raise ConvertError(path, f"unknown top-level key '{key}'; use [[attack]] and [[string]] tables")

@@ -23,9 +23,10 @@ from pathlib import Path
 from gbtools import labdesc
 from gbtools.assets import asset_name
 from gbtools.errors import ConvertError
-from gbtools.names import IDENT
+from gbtools.names import IDENT, suggest_ident
 
 MAX_STEPS = 16
+MAX_EFFECTS = 254  # ids are one byte; 255 is reserved
 WAVES_MAX = 4
 STEP_SIZE = 12
 HEADER_SIZE = 4
@@ -78,7 +79,8 @@ def note_period(path: Path, where: str, text: str, channel: str) -> int:
     period = round(2048 - clock / hz)
     if not 0 <= period <= 2047:
         lowest = "C1" if channel == "WAVE" else "C2"
-        raise ConvertError(path, f"{where}: note {text} is below the lowest {channel} pitch ({lowest})")
+        raise ConvertError(path, f"{where}: note {text} is below the lowest {channel} pitch ({lowest}); "
+                                 f"use {lowest} or higher")
     return period
 
 
@@ -122,7 +124,8 @@ def _step_bytes(path: Path, channel: str, n: int, entry, first: bool, wave_count
             if key in KEY_CHANNELS:
                 raise ConvertError(path, f"{where}: '{key}' only applies to {' / '.join(KEY_CHANNELS[key])}; "
                                          f"this effect plays on {channel}, so remove it")
-            raise ConvertError(path, f"{where}: unknown key '{key}' (keys for {channel}: {', '.join(allowed)})")
+            raise ConvertError(path, f"{where}: unknown key '{key}'; remove it or use one of the keys for "
+                                     f"{channel}: {', '.join(allowed)}")
     s = _Step(path, where, entry, channel)
     trigger = "volume" in entry
     if not trigger:
@@ -131,7 +134,8 @@ def _step_bytes(path: Path, channel: str, n: int, entry, first: bool, wave_count
             raise ConvertError(path, f"{where}: '{stray[0]}' only takes effect when the step triggers the "
                                      f"channel; add 'volume' to this step or remove '{stray[0]}'")
         if first:
-            raise ConvertError(path, f"{where}: the first step must set 'volume' (it starts the sound)")
+            raise ConvertError(path, f"{where}: the first step must set 'volume' (it starts the sound); add "
+                                     f"volume = 0-15 to it")
 
     frames = s.int("frames", 1, 255, 1)
     volume = s.int("volume", 0, 15)
@@ -173,15 +177,17 @@ def _step_bytes(path: Path, channel: str, n: int, entry, first: bool, wave_count
 def load_effect(path: Path) -> Effect:
     name = asset_name(path)
     if not IDENT.match(name):
-        raise ConvertError(path, f"effect file name '{name}' must be lower_snake_case (it becomes SFX_<NAME>)")
+        raise ConvertError(path, f"effect file name '{name}' must be lower_snake_case (it becomes SFX_<NAME>); "
+                                 f"rename the file, e.g. {suggest_ident(name)}.toml")
     try:
         doc = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
-        raise ConvertError(path, f"invalid TOML: {e}") from e
+        raise ConvertError(path, f"invalid TOML: {e}; fix the syntax at that line") from e
 
     for key in doc:
         if key not in TOP_KEYS:
-            raise ConvertError(path, f"unknown key '{key}' (top-level keys: channel, priority, waves, [[step]])")
+            raise ConvertError(path, f"unknown key '{key}'; remove it (top-level keys: channel, priority, waves, "
+                                     f"[[step]])")
     channel = doc.get("channel")
     if channel not in CHANNELS:
         raise ConvertError(path, f"'channel' must be \"P1\", \"P2\", \"WAVE\" or \"NOISE\", got {channel!r}")
@@ -192,7 +198,8 @@ def load_effect(path: Path) -> Effect:
     waves: list[bytes] = []
     if "waves" in doc:
         if channel != "WAVE":
-            raise ConvertError(path, f"'waves' only applies to WAVE effects; this one plays on {channel}")
+            raise ConvertError(path, f"'waves' only applies to WAVE effects; this one plays on {channel}, so remove "
+                                     f"'waves' or set channel = \"WAVE\"")
         raw = doc["waves"]
         if not isinstance(raw, list) or not 1 <= len(raw) <= WAVES_MAX:
             raise ConvertError(path, f"'waves' must be a list of 1-{WAVES_MAX} shapes")
@@ -221,9 +228,13 @@ def load_effects(paths: list[Path]) -> list[Effect]:
             raise ConvertError(Path(e.source), f"effect '{e.name}' is also defined by {seen[e.name]}; "
                                                f"keep one of the two files")
         seen[e.name] = e.source
-    if len(effects) > 254:
-        raise ConvertError(Path(effects[0].source).parent, "too many sound effects (max 254)")
-    return sorted(effects, key=lambda e: e.name)
+    effects.sort(key=lambda e: e.name)
+    if len(effects) > MAX_EFFECTS:
+        raise ConvertError(Path(effects[MAX_EFFECTS].source),
+                           f"is sound effect {MAX_EFFECTS + 1} of {len(effects)} (by name); at most {MAX_EFFECTS} fit "
+                           f"(ids are one byte), so delete or merge {len(effects) - MAX_EFFECTS} effect file(s) in "
+                           f"{Path(effects[0].source).parent}")
+    return effects
 
 
 # --- output ------------------------------------------------------------------------------------

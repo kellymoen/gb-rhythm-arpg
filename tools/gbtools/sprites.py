@@ -26,7 +26,7 @@ from PIL import Image
 
 from gbtools.assets import asset_name
 from gbtools.errors import ConvertError
-from gbtools.names import IDENT
+from gbtools.names import IDENT, suggest_ident
 from gbtools.tiles import shades, tile_bytes
 
 REPO = Path(__file__).resolve().parents[2]
@@ -134,7 +134,8 @@ def parse_tag_data(text: str, tag: str, source: Path) -> TagData:
         elif m := re.fullmatch(r"hit=(\d+)", tok):
             hit = int(m.group(1))
         else:
-            raise ConvertError(source, f"tag {tag}: unknown user data `{tok}`; known: dur=<n>/<d> hit=<frame> loop optional")
+            raise ConvertError(source, f"tag {tag}: unknown user data `{tok}`; remove it from the tag's user data "
+                                       f"(known: dur=<n>/<d> hit=<frame> loop optional)")
     if dur is None:
         raise ConvertError(source, f"tag {tag}: no dur=; set the tag's user data to e.g. `dur=1/8` "
                                    f"(the musical length of the whole tag; 1/4 = one beat)")
@@ -146,7 +147,7 @@ def split_tag(tag: str, source: Path) -> tuple[str, int | None]:
     m = TAG_RE.match(tag)
     if not m:
         raise ConvertError(source, f"tag {tag}: name must be <action>_<facing>, lowercase letters/digits, "
-                                   f"facing one of {' '.join(FACINGS)}")
+                                   f"facing one of {' '.join(FACINGS)}; rename the tag, e.g. idle_s")
     action, facing = m.groups()
     if facing is None:
         return action, None
@@ -209,8 +210,13 @@ def to_grid(img: Image.Image, source: Path):
 
 def rel_box(b: Box, pivot: tuple[int, int], what: str, where: str, source: Path) -> Box:
     x, y = b.x - pivot[0], b.y - pivot[1]
-    if not (-128 <= x <= 127 and -128 <= y <= 127 and 0 < b.w <= 255 and 0 < b.h <= 255):
-        raise ConvertError(source, f"{where}: {what} at ({b.x},{b.y}) {b.w}x{b.h} is too far from the pivot")
+    if not (0 < b.w <= 255 and 0 < b.h <= 255):
+        raise ConvertError(source, f"{where}: {what} at ({b.x},{b.y}) is {b.w}x{b.h}; a box is 1-255 px each "
+                                   f"way, so resize the `{what}` slice")
+    if not (-128 <= x <= 127 and -128 <= y <= 127):
+        raise ConvertError(source, f"{where}: {what} at ({b.x},{b.y}) {b.w}x{b.h} is too far from the pivot "
+                                   f"({pivot[0]},{pivot[1]}): its top-left corner is {x},{y} px away and must be "
+                                   f"within -128..127; move the `{what}` slice (or the pivot) closer")
     return Box(x, y, b.w, b.h)
 
 
@@ -218,7 +224,8 @@ def convert(png: Path, js: Path, budgets: dict[str, int], beat_ticks: int, name:
     name = name or asset_name(Path(png.stem))
     source = Path(f"{png.stem}.aseprite")
     if not IDENT.match(name):
-        raise ConvertError(source, f"sprite name `{name}` must be lowercase letters, digits and underscores")
+        raise ConvertError(source, f"sprite name `{name}` must be lowercase letters, digits and underscores; "
+                                   f"rename the file, e.g. {suggest_ident(name)}.aseprite")
     try:
         doc = json.loads(js.read_text())
         img = Image.open(png)
@@ -231,7 +238,8 @@ def convert(png: Path, js: Path, budgets: dict[str, int], beat_ticks: int, name:
         frames_raw = list(frames_raw.values())
     meta = doc["meta"]
     if not frames_raw:
-        raise ConvertError(source, "has no frames")
+        raise ConvertError(source, f"the export {js.name} has no frames; draw at least one frame in Aseprite, "
+                                   f"then {_STALE_HINT}")
     cw, ch = frames_raw[0]["sourceSize"]["w"], frames_raw[0]["sourceSize"]["h"]
     for i, f in enumerate(frames_raw):
         if f["trimmed"] or f["sourceSize"] != {"w": cw, "h": ch} or f["frame"]["w"] != cw or f["frame"]["h"] != ch:
@@ -273,7 +281,8 @@ def convert(png: Path, js: Path, budgets: dict[str, int], beat_ticks: int, name:
                                        f"({beat_ticks} per beat); use e.g. 1/4, 1/8, 1/16, 1/12, 1/32")
         total = total_num // td.dur_d
         if total > 0xFFFF:
-            raise ConvertError(source, f"tag {tag}: dur={td.dur_n}/{td.dur_d} is {total} ticks; the maximum is 65535")
+            raise ConvertError(source, f"tag {tag}: dur={td.dur_n}/{td.dur_d} is {total} ticks; the maximum is 65535, "
+                                       f"so shorten dur")
         if td.hit is not None and not 1 <= td.hit <= n:
             raise ConvertError(source, f"tag {tag}: hit={td.hit} but the tag has {n} frame(s); hit is 1-{n}")
         ends = split_ticks(total, [frames_raw[g]["duration"] for g in range(first, last + 1)], tag, source)
@@ -287,7 +296,7 @@ def convert(png: Path, js: Path, budgets: dict[str, int], beat_ticks: int, name:
         anim = Anim(tag, action, frames, ends, None if td.hit is None else td.hit - 1, td.loop)
         slot = by_action.setdefault(action, {})
         if facing in slot:
-            raise ConvertError(source, f"tag {tag}: defined twice")
+            raise ConvertError(source, f"tag {tag} is defined twice; delete or rename one of the two {tag} tags")
         if None in slot or (facing is None and slot):
             raise ConvertError(source, f"action {action}: mixes `{action}` (all facings) with per-facing tags; "
                                        f"use one or the other")
@@ -365,9 +374,11 @@ def build_frame(grid, indexed, rect, gframe, tag, where, slices, is_hit, cw, ch,
                                        f"(or hitbox:{tag}) that is live on this frame")
         hit = rel_box(xb, pivot, "hitbox", where, source)
     rel = [(ty - pivot[1], tx - pivot[0]) for tx, ty in parts]
-    for dy, dx in rel:
+    for (tx, ty), (dy, dx) in zip(parts, rel):
         if not (-127 <= dy <= 127 and -127 <= dx <= 127):
-            raise ConvertError(source, f"{where}: pivot ({pivot[0]},{pivot[1]}) is too far from the art")
+            raise ConvertError(source, f"{where}: pivot ({pivot[0]},{pivot[1]}) is too far from the art (the 8x16 "
+                                       f"part at ({tx},{ty}) is {dx},{dy} px away; at most 127 each way); move the "
+                                       f"`pivot` slice to the character's feet")
     return Frame(rel, bytes(tiles), hit, hurt)
 
 
@@ -518,8 +529,8 @@ def main(argv: list[str]) -> int:
         print(e, file=sys.stderr)
         return 1
     except KeyError as e:
-        print(f"{args.json}: missing {e} (is this an Aseprite --format json-array export with tags and slices?)",
-              file=sys.stderr)
+        print(f"{args.json}: missing {e}: not an Aseprite --format json-array export with tags and slices; "
+              f"{_STALE_HINT}", file=sys.stderr)
         return 1
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / f"sprite_{spr.name}.h").write_text(header)  # first: make's primary target

@@ -119,22 +119,23 @@ STEP = '[[step]]\nvolume = 10\npitch = "A4"\n'
 
 
 @pytest.mark.parametrize("text, message", [
-    ("channel = [", "invalid TOML"),
-    (GOOD + "volume = 3\n" + STEP, "unknown key 'volume' \\(top-level keys"),
+    ("channel = [", "invalid TOML: .*; fix the syntax at that line"),
+    (GOOD + "volume = 3\n" + STEP, "unknown key 'volume'; remove it \\(top-level keys"),
     ('channel = "P3"\npriority = 1\n' + STEP, "'channel' must be \"P1\", \"P2\", \"WAVE\" or \"NOISE\", got 'P3'"),
     ('channel = "P1"\n' + STEP, "'priority' must be an integer 1-15 \\(higher steals from lower\\), got None"),
     ('channel = "P1"\npriority = 16\n' + STEP, "'priority' must be an integer 1-15"),
     (GOOD, "no steps; add at least one \\[\\[step\\]\\] table"),
     (GOOD + STEP * 17, "17 steps \\(max 16\\)"),
-    (GOOD + STEP + "[[step]]\nvolum = 3\n", "step 2: unknown key 'volum' \\(keys for P1: frames, volume"),
+    (GOOD + STEP + "[[step]]\nvolum = 3\n", "step 2: unknown key 'volum'; remove it or use one of the keys for P1: frames, volume"),
     (GOOD + STEP + "noise_shift = 3\n", "step 1: 'noise_shift' only applies to NOISE; this effect plays on P1"),
     ('channel = "P2"\npriority = 1\n' + STEP + "sweep_pace = 1\n", "step 1: 'sweep_pace' only applies to P1"),
     (GOOD + STEP + "[[step]]\nenv_pace = 2\n",
      "step 2: 'env_pace' only takes effect when the step triggers the channel; add 'volume'"),
-    (GOOD + "[[step]]\npitch = 'A4'\n", "step 1: the first step must set 'volume'"),
+    (GOOD + "[[step]]\npitch = 'A4'\n", "step 1: the first step must set 'volume' \\(it starts the sound\\); add "
+                                         "volume = 0-15 to it"),
     (GOOD + "[[step]]\nvolume = 3\n", "step 1: the first step must set 'pitch'"),
     (GOOD + "[[step]]\nvolume = 3\npitch = 'H4'\n", "step 1: 'pitch' = 'H4' is not a note name"),
-    (GOOD + "[[step]]\nvolume = 3\npitch = 'B1'\n", "step 1: note B1 is below the lowest P1 pitch \\(C2\\)"),
+    (GOOD + "[[step]]\nvolume = 3\npitch = 'B1'\n", "step 1: note B1 is below the lowest P1 pitch \\(C2\\); use C2 or higher"),
     (GOOD + "[[step]]\nvolume = 3\npitch = 2048\n", "step 1: 'pitch' must be an integer 0-2047, got 2048"),
     (GOOD + STEP + "frames = 0\n", "step 1: 'frames' must be an integer 1-255, got 0"),
     (GOOD + "[[step]]\nvolume = 16\npitch = 9\n", "step 1: 'volume' must be an integer 0-15, got 16"),
@@ -157,7 +158,7 @@ STEP = '[[step]]\nvolume = 10\npitch = "A4"\n'
      "step 1: 'length' must be an integer 1-255"),
     ('channel = "WAVE"\npriority = 1\nwaves = ["' + "0" * 32 + '"]\n' + STEP + "env_pace = 1\n",
      "step 1: 'env_pace' only applies to P1 / P2 / NOISE"),
-    (GOOD + 'waves = ["' + "0" * 32 + '"]\n' + STEP, "'waves' only applies to WAVE effects; this one plays on P1"),
+    (GOOD + 'waves = ["' + "0" * 32 + '"]\n' + STEP, "'waves' only applies to WAVE effects; this one plays on P1, so remove 'waves' or set channel = \"WAVE\""),
 ])
 def test_errors_name_the_file_step_and_fix(tmp_path, text, message):
     with pytest.raises(ConvertError, match=message) as err:
@@ -166,7 +167,8 @@ def test_errors_name_the_file_step_and_fix(tmp_path, text, message):
 
 
 def test_bad_file_name(tmp_path):
-    with pytest.raises(ConvertError, match="effect file name 'Big Zap' must be lower_snake_case"):
+    with pytest.raises(ConvertError, match="effect file name 'Big Zap' must be lower_snake_case \\(it becomes "
+                                           "SFX_<NAME>\\); rename the file, e.g. big_zap.toml"):
         load(tmp_path, GOOD + STEP, name="Big Zap")
 
 
@@ -175,6 +177,15 @@ def test_two_files_for_one_effect(tmp_path):
     b = write(tmp_path, GOOD + STEP, "zap_genplaceholder")
     with pytest.raises(ConvertError, match="effect 'zap' is also defined by"):
         sfx.load_effects([a, b])
+
+
+def test_too_many_effects_names_the_first_file_over_the_limit_and_the_fix(tmp_path, monkeypatch):
+    monkeypatch.setattr(sfx, "MAX_EFFECTS", 2)
+    files = [write(tmp_path, GOOD + STEP, n) for n in ("c", "a", "b")]
+    with pytest.raises(ConvertError) as err:
+        sfx.load_effects(files)
+    assert str(err.value) == (f"{tmp_path / 'c.toml'}: is sound effect 3 of 3 (by name); at most 2 fit (ids are one "
+                              f"byte), so delete or merge 1 effect file(s) in {tmp_path}")
 
 
 def test_generated_record_bytes_and_c(tmp_path):
