@@ -6,6 +6,7 @@
 #include "gb/fx.h"
 #include "gb/hud.h"
 #include "gb/input.h"
+#include "gb/isr.h"
 #include "gb/text.h"
 #include "music.h"
 #include "scenes/scene.h"
@@ -92,7 +93,8 @@ static void draw_sfx(void)
 }
 
 /* A run of on-beat presses plays rising HITS pitches, like a combo string; an OFFBEAT press or two
- * silent beats end the run. (The combat scene sets sfx_hit_step from the combo matcher instead.) */
+ * silent beats end the run. Each press plays its hit at once (isr_hits_on_press); the combat scene
+ * schedules the hit of the combo step a press became instead. */
 static void next_hit_step(const press_t *p)
 {
     if (p->judgement.grade == GRADE_OFFBEAT || ++sfx_hit_step >= music_hit_count)
@@ -147,6 +149,7 @@ scene_t rhythmtest_run(void)
     counts[0] = counts[1] = counts[2] = 0;
     count_dirty = 0;
     sfx_hit_step = 0;
+    isr_hits_on_press = 1;
     press_stage = 0;
     song = SONG_RHYTHMTEST;
     hud_init();
@@ -237,7 +240,9 @@ scene_t rhythmtest_run(void)
             last_press_beat = 0;
             song_dirty = bpm_dirty = 1;
         }
-        if (edges & J_START)
+        if (edges & J_START) {
+            isr_hits_on_press = 0;
             return SCENE_MENU;
+        }
     }
 }

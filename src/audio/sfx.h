@@ -24,12 +24,12 @@ void sfx_play(uint8_t id);
 /* VBlank ISR only, right after music_update(): start requested effects and step running ones. */
 void sfx_update(void);
 
-/* VBlank ISR only: play a musical hit now (the press's own frame) with the song's hit instrument at
- * HITS pitch sfx_hit_step (wrapping). Does nothing if the song has no HITS track. */
-void sfx_hit(void);
+/* VBlank ISR only: play a musical hit now with the song's hit instrument at HITS pitch `step`
+ * (wrapping). Does nothing if the song has no HITS track. Which hits play when: gb/isr.h. */
+void sfx_hit(uint8_t step);
 
-/* Musical hits: the string step (0-based) whose pitch the next on-beat press plays from the song's
- * HITS set. The main loop sets it from combo events; the ISR reads it when it plays the hit. */
+/* The rhythm test's musical-hit pitch (gb/isr.h, isr_hits_on_press): the next on-beat press plays
+ * HITS pitch sfx_hit_step. The scene steps it; the ISR reads it. */
 extern volatile uint8_t sfx_hit_step;
 
 #endif

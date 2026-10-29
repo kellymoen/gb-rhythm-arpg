@@ -36,6 +36,8 @@ STATS = {
     "strikes": (12, 1), "player_hurts": (13, 1), "strikes_dodged": (14, 1), "last_grade": (15, 1),
     "last_attack": (16, 1), "attacks_started": (17, 1),
 }
+PLAYER_START_X = 56  # src/scenes/combat.h
+DODGE_PX = 16  # player.dodge_px
 STRING = {"rush": 0, "pause": 1, "crush": 2, "crush_lunge": 3}  # COMBO_STRING_* (data/combos.toml)
 IDLE = 0xFF  # COMBO_IDLE
 GRADES = {"OFFBEAT": 0, "GOOD": 1, "PERFECT": 2}
@@ -152,12 +154,38 @@ class Combat(Driver):
         self.variant = variant
         self.offsets = tuning_offsets(variant)
         self.rom_judged: list[tuple[int, int]] = []
+        self.judged_at: list[int] = []  # the frame of every ROM judgement (a press read by the ISR)
         a = self.syms["_beat_judge"]
-        pb.hook_register(a >> 16, a & 0xFFFF, lambda _: self.rom_judged.append(judge(*self.clock())), None)
+        pb.hook_register(a >> 16, a & 0xFFFF, lambda _: self.on_judge(), None)
+        self.hits: list[tuple[int, int, tuple]] = []  # musical hits: (frame, HITS pitch, clock)
+        self.hit_frames: list[tuple[int, tuple]] = []
+        a = self.syms["_sfx_hit"]
+        pb.hook_register(a >> 16, a & 0xFFFF,
+                         lambda _: self.hit_frames.append((self.frame, self.clock())), None)
+        self.tick = self.tick_and_read_hits
         enter_scene(pb, "combat")
         for name, value in (pokes or {}).items():
             self.set_tuning(name, value)
         self.step(n=SETTLE)
+
+    def tick_and_read_hits(self) -> None:
+        """Tick; if a musical hit started, read its pitch back from the P2 channel it plays on."""
+        self.pb.tick(1, True)
+        while len(self.hits) < len(self.hit_frames):
+            frame, clock = self.hit_frames[len(self.hits)]
+            self.hits.append((frame, self.hit_pitch(), clock))
+
+    def hit_pitch(self) -> int:
+        m, chan = self.pb.memory, self.syms["_sfx_chan"] + 12  # sfx_chan[CH_P2], 12 bytes each
+        assert m[chan + 2] == 8, "no musical hit on P2 (SFX_HIT_PRIORITY)"
+        freq = m[chan + 6] | m[chan + 7] << 8
+        table = self.syms["_music_note_freq"]
+        hits = [m[self.syms["_music_hits"] + i] for i in range(m[self.syms["_music_hit_count"]])]
+        return [m[table + 2 * n] | m[table + 2 * n + 1] << 8 for n in hits].index(freq)
+
+    def on_judge(self) -> None:
+        self.rom_judged.append(judge(*self.clock()))
+        self.judged_at.append(self.frame)
 
     def set_tuning(self, name: str, value: int) -> None:
         a = self.syms["_tuning"] + self.offsets[name]
@@ -278,6 +306,205 @@ def test_string_breaks_after_grace():
     c.stop()
 
 
+# --- musical hits ----------------------------------------------------------------------------------
+
+DODGE_GRACE = 2  # input.dodge_grace (data/tuning.toml)
+
+
+def slot_start(slot: int) -> int:
+    """Song position of a step slot's start, in 1/256 ticks."""
+    return slot * SLOT_TICKS * 256
+
+
+def position(clock) -> int:
+    beat, tick, frac, _rate = clock
+    return (beat * BEAT_TICKS + tick) * 256 + frac
+
+
+def hit_pitches(c: Combat) -> list[int]:
+    return [pitch for _frame, pitch, _clock in c.hits]
+
+
+def test_musical_hits_follow_the_string():
+    """Hit N of a string plays HITS pitch N, each on its step slot; an OFFBEAT step plays none but still
+    counts (the next hit plays the pitch after it)."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    s = first_free_slot(c)
+    c.play(["a", "a", "a", "a"], s, errors=[0, 7, -1, 2])
+    c.step(n=20)
+    c.check_judged()
+    assert c.stat("finished") == STRING["rush"]
+    assert hit_pitches(c) == [0, 2, 3]
+    for (_frame, _pitch, clock), slot in zip(c.hits, [s, s + 2, s + 3]):
+        assert position(clock) >= slot_start(slot), "a hit sounded before its step slot"
+    c.stop()
+
+
+def test_a_dodge_plays_no_hit():
+    """A then B within dodge_grace frames, and A+B together: dodges, with no musical hit, also when
+    the A was on the beat."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    s = first_free_slot(c)
+    c.tap(("a",), s, error=0)
+    c.step(("b",))  # B one frame after A: a dodge
+    c.step(n=30)
+    c.tap(("a",), s + 4, error=-1)
+    c.step()
+    c.step(("b",))  # two frames after: still a dodge
+    c.step(n=30)
+    c.tap(("a", "b"), s + 8, error=0)
+    c.step(n=30)
+    assert c.stat("dodges") == 3 and c.stat("steps") == 0
+    assert c.hits == [], f"dodges played musical hits {c.hits}"
+    c.stop()
+
+
+def test_a_press_on_a_taken_slot_plays_no_hit():
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    s = first_free_slot(c)
+    c.tap(("a",), s, error=-1)
+    c.step(n=3)
+    c.tap(("a",), s, error=3)  # judged against the same slot: ignored by the matcher
+    c.step(n=30)
+    assert c.stat("steps") == 1
+    assert hit_pitches(c) == [0]
+    c.stop()
+
+
+def test_a_press_that_breaks_a_string_plays_the_new_strings_first_pitch():
+    """A A, then B: B fits no candidate, so Rush breaks and B starts Crush at hit 0."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    c.play(["a", "a", "b"], first_free_slot(c))
+    c.step(n=30)
+    c.check_judged()
+    assert c.stat("breaks") == 1
+    assert hit_pitches(c) == [0, 1, 0]
+    c.stop()
+
+
+@pytest.mark.parametrize("quantize", [1, 0])
+def test_hit_latency(quantize):
+    """Frames from the press (the ISR reading it) to its musical hit, for an early, an on-time and a
+    late press. A hit waits dodge_grace frames (a dodge must not play one); quantized, an early press
+    also waits for its slot's start, and sounds on the first frame at or after it."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "feedback_quantize_hits": quantize})
+    s = first_free_slot(c)
+    delays = {}
+    for k, (name, error) in enumerate([("early", -5), ("on time", 0), ("late", 4)]):
+        slot = s + 6 * k  # far enough apart that each press starts a new string
+        c.tap(("a",), slot, error=error)
+        c.step(n=20)
+        frame, pitch, clock = c.hits[k]
+        delays[name] = frame - c.judged_at[-1]
+        if quantize and name == "early":
+            assert 0 <= position(clock) - slot_start(slot) < clock[3], "not the first frame of the slot"
+        assert pitch == 0
+    c.check_judged()
+    print(f"press -> hit frames (quantize {quantize}): {delays}")
+    if quantize:
+        assert delays == {"early": 5, "on time": DODGE_GRACE, "late": DODGE_GRACE} or \
+            delays == {"early": 6, "on time": DODGE_GRACE, "late": DODGE_GRACE}, delays
+    else:
+        assert delays == {"early": DODGE_GRACE, "on time": DODGE_GRACE, "late": DODGE_GRACE}, delays
+    c.stop()
+
+
+# --- feel params (data/tuning.toml) ------------------------------------------------------------------
+
+def sfx_ids(variant: str = "cgb") -> dict[str, int]:
+    header = (ROMS[variant].parent / "gen" / "sfx.h").read_text()
+    return {m[1]: int(m[2]) for m in re.finditer(r"#define SFX_(\w+) (\d+)", header)}
+
+
+def record_sfx(c: Combat) -> list[int]:
+    """Every sfx_play() request from now on (the id is in A)."""
+    played: list[int] = []
+    a = c.syms["_sfx_play"]
+    c.pb.hook_register(a >> 16, a & 0xFFFF, lambda _: played.append(c.pb.register_file.A), None)
+    return played
+
+
+@pytest.mark.parametrize("min_hits,sound", [(2, False), (1, True)])
+def test_break_sound_needs_min_hits(min_hits, sound):
+    """A lone hit that breaks plays SFX_STRING_BREAK only when feedback.break_sound_min_hits <= 1."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "feedback_break_sound_min_hits": min_hits})
+    played = record_sfx(c)
+    s = first_free_slot(c)
+    c.tap(("a",), s)
+    while c.slot_now() < s + 6:
+        c.step()
+    c.step(n=4)
+    assert c.stat("breaks") == 1
+    assert (sfx_ids()["STRING_BREAK"] in played) == sound
+    c.stop()
+
+
+def dash_track(halflife: int) -> list[int]:
+    """The player's x (1/16 px) on each of the 12 frames after a dodge (straight back, no target)."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "player_slide_halflife_ticks": halflife})
+    c.tap(("a", "b"), first_free_slot(c), error=5)  # GOOD: no slow-mo
+    xs = []
+    for _ in range(12):
+        c.step()
+        xs.append(c.u8("_combat_px") | c.u8("_combat_px", 1) << 8)
+    c.stop()
+    return xs
+
+
+def test_dash_eases_out_in_song_ticks():
+    """player.slide_halflife_ticks: the dash covers half of what is left every that many song ticks
+    (120 BPM: 1.6 ticks per frame). 24 ticks = 15 frames per halving, 2 ticks = about one a frame."""
+    start = PLAYER_START_X * 16
+    slow, fast = dash_track(24), dash_track(2)
+    assert start - fast[-1] == DODGE_PX * 16, "the default dash is over within 12 frames"
+    assert start - slow[-1] < DODGE_PX * 16 // 2, "a 24-tick half-life has not halved in 12 frames"
+    assert start - slow[-1] >= 0
+
+
+def popup_rise(rise_ticks: int) -> int:
+    """How far the grade popup rose (px) over the 16 frames after it first showed."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "feedback_popup_rise_ticks": rise_ticks,
+                      "feedback_popup_ticks": 96})
+    c.tap(("a",), first_free_slot(c))
+    while c.pb.memory[0xFE00 + 4 * 8] == 0:
+        c.step()
+    y0 = c.pb.memory[0xFE00 + 4 * 8]
+    c.step(n=16)
+    y1 = c.pb.memory[0xFE00 + 4 * 8]
+    c.stop()
+    return y0 - y1
+
+
+def test_popup_rises_by_popup_rise_ticks():
+    """16 frames at 120 BPM are ~26 song ticks: 3 px at 1 px per 8 ticks, ~13 px at 1 per 2."""
+    assert popup_rise(8) in (3, 4)
+    assert popup_rise(2) in (12, 13, 14)
+
+
+def telegraph_frames(blink: int) -> int:
+    """Frames the "!" shows during one 48-frame stretch of a telegraph that lasts several beats."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "dummy_telegraph_blink_ticks": blink})
+    c.set_tuning("dummy_telegraph_beats", 8)
+    c.set_tuning("dummy_attack_every_beats", 2)
+    while not telegraph_shown(c):
+        c.step()
+    shown = 0
+    for _ in range(60):  # two beats at 120 BPM
+        c.step()
+        shown += telegraph_shown(c)
+    c.stop()
+    return shown
+
+
+def test_telegraph_blink_length():
+    assert telegraph_frames(48) == 60, "48 ticks: shown the whole beat"
+    assert 40 <= telegraph_frames(36) <= 50, "36 ticks: the first 3/4 of each beat"
+    assert 12 <= telegraph_frames(12) <= 18, "12 ticks: the first quarter"
+
+
 # --- dodges and slow-mo ---------------------------------------------------------------------------
 
 def test_perfect_dodge_enters_slowmo():
@@ -317,6 +544,35 @@ def test_slowmo_halves_the_dummys_anim_rate():
     after = c.pb.memory[pos + off] | c.pb.memory[pos + off + 1] << 8
     ticks = 20 * 1.6  # 120 BPM: 1.6 song ticks per frame
     assert abs((after - before) % 96 - ticks / 2) <= 3, f"dummy anim moved {after - before} ticks in 20 frames"
+    c.stop()
+
+
+def dummy_phase_error(c: Combat) -> int:
+    """How far (song ticks) the dummy's looping anim is from where the song says it should be."""
+    base, off = c.syms["_combat_dummy"], anim_pos_offset()
+    m = c.pb.memory
+    pos = m[base + off] | m[base + off + 1] << 8
+    count = m[base + off + 2]
+    ends = base + off - 32  # anim_t.ends[16] precede pos
+    length = m[ends + 2 * (count - 1)] | m[ends + 2 * (count - 1) + 1] << 8
+    beat, tick, _frac, _rate = c.clock()
+    err = (beat * BEAT_TICKS + tick - pos) % length
+    return min(err, length - err)
+
+
+def test_dummy_is_back_on_the_beat_after_slowmo():
+    """During slow-mo the dummy drops half its ticks; when it ends its idle loop restarts in phase."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    assert dummy_phase_error(c) <= 2
+    c.tap(("a", "b"), first_free_slot(c), error=0)
+    c.step(n=4)
+    assert c.stat("slowmos") == 1
+    c.step(n=20)
+    assert dummy_phase_error(c) > 8, "slow-mo should have put the dummy behind"
+    while c.u8("_combat_slowmo") | c.u8("_combat_slowmo", 1) << 8:
+        c.step()
+    c.step(n=6)
+    assert dummy_phase_error(c) <= 2, "the dummy stayed off the beat after slow-mo"
     c.stop()
 
 
@@ -365,10 +621,10 @@ def test_dummy_strike_misses_a_player_out_of_range():
     c.stop()
 
 
-@pytest.mark.parametrize("error", [-2, 3])
+@pytest.mark.parametrize("error", [-2, 3, 6])
 def test_dodging_on_the_strike_beat_avoids_it(error):
-    """A dodge 2 frames early (dodging when the strike lands) or 3 frames late (inside the strike's
-    grace) avoids the strike; both are PERFECT, so slow-mo starts too."""
+    """A dodge 2 frames early (dodging when the strike lands) or 3 or 6 (good_window) frames late
+    (inside the strike's grace) avoids the strike."""
     c = strike_ready()
     while not telegraph_shown(c):
         c.step()
@@ -378,7 +634,43 @@ def test_dodging_on_the_strike_beat_avoids_it(error):
     c.check_judged()
     assert c.stat("strikes") == 1 and c.stat("strikes_dodged") == 1
     assert c.stat("player_hurts") == 0
-    assert c.stat("slowmos") == 1
+    assert c.stat("slowmos") == (1 if abs(error) <= 3 else 0)  # PERFECT dodges start slow-mo
+    c.stop()
+
+
+VSYNC = "f040e680c8afe0917600f091b728f9c9"  # GBDK's wait_vbl_done; its `ret` is at +15
+
+
+def run_main_loop_at_30fps(c: Combat) -> None:
+    """Every other vsync() waits for one more VBlank: the scene's loop runs at 30 fps while the
+    VBlank ISR (beat clock, input, sound) still runs at 60."""
+    v = c.syms["_vsync"]
+    assert bytes(c.pb.memory[v + i] for i in range(16)).hex() == VSYNC, "GBDK's vsync() changed"
+    calls = [0]
+
+    def wait_again(_):
+        calls[0] += 1
+        if calls[0] & 1:
+            c.pb.register_file.PC = v + 5  # back to `xor a; ldh (_vbl_done), a; halt`
+
+    c.pb.hook_register(0, v + 15, wait_again, None)
+
+
+@pytest.mark.parametrize("error,hurt", [(3, False), (6, False), (7, True)])
+def test_strike_grace_is_counted_in_vblanks(error, hurt):
+    """With the main loop at 30 fps, a late dodge still has to come within good_window (6) frames of
+    the strike's beat: the grace is counted in VBlanks, not in main-loop passes."""
+    c = strike_ready()
+    run_main_loop_at_30fps(c)
+    while not telegraph_shown(c):
+        c.step()
+    beat = c.clock()[0]
+    c.tap(("a", "b"), (beat + 1) * STEPS_PER_BEAT, error)
+    c.step(n=30)
+    c.check_judged()
+    assert c.stat("strikes") == 1 and c.stat("dodges") == 1
+    assert c.stat("player_hurts") == (1 if hurt else 0)
+    assert c.stat("strikes_dodged") == (0 if hurt else 1)
     c.stop()
 
 

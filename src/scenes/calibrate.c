@@ -20,9 +20,9 @@
  * beat, so a press's judgement.frames is its raw distance to the nearest beat. Musical hits are
  * off so a tap makes no sound of its own. The tuning values come back when the scene ends. */
 
-/* The steady beat the player taps to (PROVISIONAL: the rhythm-test loop, whose kick and snare mark
- * every beat). A dedicated click song swaps in here. */
-#define CALIB_SONG song_rhythmtest
+/* The steady beat the player taps to (ADR 0008: "tap A to a click"): assets/music/calib.mid, a
+ * metronome click on every beat with beat 1 accented (PROVISIONAL placeholder, 110 BPM). */
+#define CALIB_SONG song_calib
 #define PLAY_SONG(song) music_play(BANK(song), &song) /* expands CALIB_SONG before BANK() pastes */
 
 #define ROW_TITLE 0
@@ -233,7 +233,7 @@ scene_t calibrate_scene(void) BANKED
     jobs = 0;
     text_print(1, ROW_TITLE, "CALIBRATE LATENCY");
     text_print(1, ROW_HELP, "TAP A ON EACH BEAT");
-    text_print(1, ROW_HELP + 1, "OF THE DRUMS.");
+    text_print(1, ROW_HELP + 1, "OF THE CLICK.");
     text_print(1, ROW_BACK, "START: BACK");
     line_value(ROW_CURRENT, "CURRENT", latency, 1);
     start_tapping();

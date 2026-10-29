@@ -10,6 +10,7 @@
 #include "gb/fx.h"
 #include "gb/hud.h"
 #include "gb/input.h"
+#include "gb/isr.h"
 #include "gb/oam.h"
 #include "gb/overlay.h"
 #include "gb/spriteanim.h"
@@ -27,12 +28,12 @@
  *
  * Frame order and budget (docs/perf.md, "M2 combat scene"):
  *   1. palette (fx), beat clock
- *   2. presses -> combo matcher, matcher tick -> events. Grading already happened in the VBlank ISR,
- *      on the press's own frame, with its musical hit: nothing here can delay either.
+ *   2. presses -> combo matcher (which schedules each step's musical hit at once), matcher tick ->
+ *      events. Grading already happened in the VBlank ISR, on the press's own frame.
  *   3. the player's next attack or dodge starts (what matters most for feel goes first)
  *   4. anims advance (at most one new frame shown per video frame), hit frames are judged
  *   5. beat work (dummy telegraph and strike), slow-mo countdown
- *   6. at most one other costly job: hurt / flinch / walk / idle / turn anims
+ *   6. at most one deferred anim job: hurt / flinch / walk / idle / turn anims
  *   7. movement, popups and flash, OAM, HUD, timing overlay, one text job if nothing costly ran
  *   8. tile streaming in the time left, then a late OAM rewrite if a frame finished in time.
  * Each costly step only starts before its LY limit below, so stacked work slips a frame instead of
@@ -50,6 +51,7 @@
 #define VERY_LATE_LY 64        /* ...and at or after this one only draws (anims and movement wait) */
 #define POP_LIMIT_LY 64        /* another press is fed to the matcher only before this line */
 #define TICK_LIMIT_LY 80       /* the matcher's tick only runs before this line */
+#define LAND_LIMIT_LY 44       /* a held-back press lands early (its musical hit) before this line */
 #define START_LIMIT_LY 68      /* the player's attack or dodge only starts before this line */
 #define PRESENT_LIMIT_LY 60    /* a new anim frame is only shown before this line */
 #define COSTLY_LIMIT_LY 64     /* step 6 only starts before this line */
@@ -62,15 +64,14 @@
 
 /* Shared with combat_events.c and combat_ui.c (combat.h); globals so the ROM tests can read them. */
 combat_stats_t combat_stats;
-uint8_t combat_want, combat_pending, combat_pending_attack, combat_pending_grade, combat_pending_heavy;
-uint8_t combat_pending_held;
-uint8_t combat_attack, combat_attack_grade, combat_attack_heavy;
+uint8_t combat_want, combat_pending, combat_pending_held;
+combat_attack_t combat_next, combat_attack;
 spriteanim_t combat_player, combat_dummy;
 beat_clock_t combat_now;
 int16_t combat_px, combat_py;
 uint8_t combat_busy;
 uint16_t combat_slowmo;
-uint8_t combat_strike_grace, combat_dummy_hitstop;
+uint8_t combat_frame, combat_press_frame, combat_strike_waits, combat_strike_frame, combat_dummy_hitstop;
 
 static anim_clock_t clock;
 static combo_t combo;
@@ -80,9 +81,10 @@ static uint8_t divider, carry_p, carry_d;
 static int16_t px, py; /* the player's feet this frame, whole px */
 
 /* Slide: a lunge toward the dummy (per axis, stopping at contact) or a dodge dash (fixed direction).
- * It eases out, moving half the distance left each frame. */
+ * It eases out in song time, moving half the distance left every player.slide_halflife_ticks. */
 static uint8_t slide_left, slide_lunge;
 static int8_t slide_sx, slide_sy;
+static uint16_t slide_ticks; /* song ticks toward the next halving */
 
 /* combos.toml anim names -> player actions (generated X-macro lists). */
 #define ACTION(n) SPRITE_PLAYER_##n,
@@ -122,15 +124,10 @@ static uint8_t combo_dir(uint8_t held)
     return COMBO_DIR_SIDE;
 }
 
-static int16_t iabs(int16_t v)
-{
-    return v < 0 ? -v : v;
-}
-
 /* 8-way direction of a screen vector (2:1 sectors, no division). */
 static uint8_t dir8(int16_t dx, int16_t dy)
 {
-    int16_t ax = iabs(dx), ay = iabs(dy);
+    int16_t ax = IABS(dx), ay = IABS(dy);
 
     if (ax > (ay << 1))
         return dx > 0 ? FACING_E : FACING_W;
@@ -148,7 +145,7 @@ static uint8_t lock_toward(uint8_t ref)
     int16_t dx = DUMMY_X - px, dy = DUMMY_Y - py, range = tuning.combat_lock_range_px;
     uint8_t f, d;
 
-    if (iabs(dx) > range || iabs(dy) > range)
+    if (IABS(dx) > range || IABS(dy) > range)
         return FACING_COUNT;
     f = dir8(dx, dy);
     d = (uint8_t)(f - ref) & 7;
@@ -228,9 +225,24 @@ static void slide_step(void)
         return;
     }
     s = (int16_t)step << 4;
-    if (slide_sx && slide_sy)
+    if (slide_sx && slide_sy) /* geometry, not feel: a diagonal moves 3/4 per axis (~1/sqrt 2) */
         s -= s >> 2;
     move_by(slide_sx > 0 ? s : slide_sx < 0 ? -s : 0, slide_sy > 0 ? s : slide_sy < 0 ? -s : 0);
+}
+
+/* Advance the slide by `ticks` song ticks: one halving per slide_halflife_ticks (a few at most per
+ * frame, since each halves what is left). */
+static void slide_run(uint8_t ticks)
+{
+    uint8_t h = (uint8_t)tuning.player_slide_halflife_ticks;
+
+    if (!h)
+        h = 1;
+    slide_ticks += ticks;
+    while (slide_left && slide_ticks >= h) {
+        slide_ticks -= h;
+        slide_step();
+    }
 }
 
 /* Hit frames judge where the attack ends up: finish the lunge at once. */
@@ -249,14 +261,14 @@ static void start_pending(void)
 
     if (combat_pending == PENDING_DODGE) {
         spriteanim_play(&combat_player, SPRITE_PLAYER_DODGE, f, &combat_now);
-        combat_attack = COMBO_NO_ATTACK;
+        combat_attack.attack = COMBO_NO_ATTACK;
         lock = held != FACING_COUNT ? held : (uint8_t)(f + 4) & 7; /* dash direction */
         slide_sx = facing_dx[lock];
         slide_sy = facing_dy[lock];
         slide_left = (uint8_t)tuning.player_dodge_px;
         slide_lunge = 0;
     } else {
-        a = &combos.attacks[combat_pending_attack];
+        a = &combos.attacks[combat_next.attack];
         slide_left = 0;
         lock = lock_toward(held != FACING_COUNT ? held : f);
         if (lock != FACING_COUNT) {
@@ -271,17 +283,17 @@ static void start_pending(void)
         }
         if (!spriteanim_play(&combat_player, attack_action[a->anim], f, &combat_now))
             spriteanim_play(&combat_player, SPRITE_PLAYER_LIGHT1, f, &combat_now); /* missing art */
-        combat_attack = combat_pending_attack;
-        combat_attack_grade = combat_pending_grade;
-        combat_attack_heavy = combat_pending_heavy;
+        combat_attack = combat_next;
         combat_stats.attacks_started++;
     }
+    slide_ticks = 0;
     combat_busy = 1;
     combat_pending = PENDING_NONE;
 }
 
-/* At most one of these per frame, in priority order. Returns 1 if it did one. */
-static uint8_t costly(void)
+/* Run one deferred anim job (combat.h WANT_*, then walk / turn / idle), at most one per frame, in
+ * priority order. Returns 1 if it ran one. */
+static uint8_t run_deferred_anim_job(void)
 {
     uint8_t f;
 
@@ -289,12 +301,12 @@ static uint8_t costly(void)
         combat_want &= (uint8_t)~WANT_PLAYER_HURT;
         spriteanim_play(&combat_player, SPRITE_PLAYER_HURT, combat_player.facing, &combat_now);
         combat_busy = 1;
-        combat_attack = COMBO_NO_ATTACK;
+        combat_attack.attack = COMBO_NO_ATTACK;
         slide_left = 0;
         return 1;
     }
     if (combat_want & WANT_DUMMY_HURT) {
-        combat_want &= (uint8_t)~(WANT_DUMMY_HURT | WANT_DUMMY_IDLE);
+        combat_want &= (uint8_t)~(WANT_DUMMY_HURT | WANT_DUMMY_IDLE | WANT_DUMMY_PHASE);
         spriteanim_play(&combat_dummy, SPRITE_DUMMY_HURT, FACING_S, &combat_now);
         spriteanim_hitstop(&combat_dummy, combat_dummy_hitstop);
         carry_d = 0;
@@ -316,9 +328,10 @@ static uint8_t costly(void)
             return 1;
         }
     }
-    if (combat_want & WANT_DUMMY_IDLE) {
-        combat_want &= (uint8_t)~WANT_DUMMY_IDLE;
-        spriteanim_play(&combat_dummy, SPRITE_DUMMY_IDLE, FACING_S, &combat_now);
+    if (combat_want & (WANT_DUMMY_IDLE | WANT_DUMMY_PHASE)) {
+        f = combat_want & WANT_DUMMY_IDLE ? SPRITE_DUMMY_IDLE : combat_dummy.action;
+        combat_want &= (uint8_t)~(WANT_DUMMY_IDLE | WANT_DUMMY_PHASE);
+        spriteanim_play(&combat_dummy, f, FACING_S, &combat_now); /* loops start in phase */
         carry_d = 0;
         return 1;
     }
@@ -330,7 +343,7 @@ static void walk(void)
     uint8_t held = input_held;
     int16_t s = tuning.player_walk_speed, mx = 0, my = 0;
 
-    if ((held & (J_LEFT | J_RIGHT)) && (held & (J_UP | J_DOWN)))
+    if ((held & (J_LEFT | J_RIGHT)) && (held & (J_UP | J_DOWN))) /* geometry: 3/4 per axis (~1/sqrt 2) */
         s -= s >> 2;
     if (held & J_RIGHT)
         mx = s;
@@ -352,6 +365,31 @@ static void draw_world(void)
     oam_end();
 }
 
+/* Musical hits (gb/isr.h): the step a press became plays its HITS pitch. The matcher decides it
+ * as soon as the press lands (provisionally, in the tick on the press's own frame, while it still
+ * holds the press back for dodge_grace); a dodge that undoes it cancels the hit. OFFBEAT steps play
+ * none. Call after every combo_press and combo_tick. */
+static void schedule_hit(void)
+{
+    const combo_hit_t *h = combo_hit(&combo);
+
+    if (h->ev.type == COMBO_EV_DODGE)
+        isr_hit_cancel();
+    else if (h->ev.type != COMBO_EV_NONE && h->ev.grade != GRADE_OFFBEAT)
+        isr_hit_schedule(h->ev.step, h->slot, h->frame, h->buttons);
+}
+
+/* Will `t` more ticks take the player's attack into its hit frame (and the frame do the hit's work)? */
+static uint8_t hit_frame_due(uint8_t t)
+{
+    const anim_t *a = &combat_player.anim;
+    uint8_t k = a->hit_frame;
+
+    if (combat_attack.attack == COMBO_NO_ATTACK || k == ANIM_NO_HIT || !k || a->mframe >= k)
+        return 0;
+    return a->pos + t >= a->ends[k - 1];
+}
+
 static void handle(uint8_t n)
 {
     uint8_t i;
@@ -365,7 +403,7 @@ scene_t combat_scene(void) BANKED
 {
     press_t p;
     combo_input_t in;
-    uint8_t ticks, pticks, dticks, work, late, drained, started, pev, dev, frame, edges, ly;
+    uint8_t ticks, pticks, dticks, work, late, drained, started, player_ev, dummy_ev, frame, edges, ly, n;
 
     scene_begin();
     hud_init();
@@ -376,12 +414,11 @@ scene_t combat_scene(void) BANKED
     SPRITEANIM_INIT(&combat_dummy, dummy, TILE_WORLD_SPR, ENEMY_SLOT_TILES);
     combat_events_init();
     combo_reset(&combo);
-    combat_want = combat_pending = combat_busy = combat_strike_grace = 0;
-    combat_attack = COMBO_NO_ATTACK;
+    combat_want = combat_pending = combat_busy = combat_strike_waits = 0;
+    combat_attack.attack = COMBO_NO_ATTACK;
     combat_slowmo = 0;
     slide_left = 0;
     divider = carry_p = carry_d = 0;
-    sfx_hit_step = 0;
     fx_set_dim(0);
     combat_px = PLAYER_START_X << 4;
     combat_py = PLAYER_START_Y << 4;
@@ -406,17 +443,20 @@ scene_t combat_scene(void) BANKED
         vsync();
         fx_update(); /* palettes first */
         music_now(&combat_now);
+        combat_frame = input_frame;
         ticks = anim_clock_ticks(&clock, &combat_now);
         ly = LY_REG;
         late = ly >= LATE_START_LY;
         work = late;
+        drained = 0;
 
-        /* presses -> matcher. A late frame leaves them queued for the next one: their grade and
-         * musical hit were fixed in the ISR, only what they show waits. The frame counter is read
+        /* presses -> matcher. A late frame leaves them queued for the next one: their grade was
+         * fixed in the ISR; what they show and their musical hit wait (the ISR still holds a hit
+         * back for a dodge it saw itself). The frame counter is read
          * before draining (dodge_grace timing); the tick waits while presses are still queued, so
          * it never resolves a held-back A whose B is still in the queue. */
         if (!late) {
-            frame = input_frame;
+            frame = combat_frame;
             drained = 1;
             while (1) {
                 if (LY_REG >= POP_LIMIT_LY) {
@@ -426,16 +466,29 @@ scene_t combat_scene(void) BANKED
                 if (!input_pop(&p))
                     break;
                 combat_pending_held = p.held;
-                combat_pending_heavy = p.buttons & J_B ? 1 : 0;
+                combat_next.heavy = p.buttons & J_B ? 1 : 0;
                 combat_popup(p.judgement.grade);
                 in.buttons = (p.buttons & J_A ? COMBO_A : 0) | (p.buttons & J_B ? COMBO_B : 0);
                 in.dir = combo_dir(p.held);
                 in.frame = p.frame;
                 in.judgement = p.judgement;
-                handle(combo_press(&combo, &in, evs));
+                combat_press_frame = p.frame;
+                n = combo_press(&combo, &in, evs);
+                schedule_hit();
+                handle(n);
             }
-            if (drained && LY_REG < TICK_LIMIT_LY)
-                handle(combo_tick(&combo, &combat_now, frame, evs));
+            if (drained && LY_REG < TICK_LIMIT_LY) {
+                n = combo_tick(&combo, &combat_now, frame, evs);
+                schedule_hit();
+                handle(n);
+                /* a held-back press lands now, so its musical hit is known, unless the player's
+                 * hit frame is due this frame too (both together don't fit; it lands next frame,
+                 * still within dodge_grace, or when it commits) */
+                if (LY_REG < LAND_LIMIT_LY && !hit_frame_due(ticks + carry_p)) {
+                    combo_land(&combo);
+                    schedule_hit();
+                }
+            }
         }
 
         /* The player's attack or dodge first. Its anim then advances from the next frame, with
@@ -458,37 +511,37 @@ scene_t combat_scene(void) BANKED
         /* Anims: at most one new frame shown per video frame, none on a busy one. On a very late
          * frame neither character updates (their ticks carry to the next frame, so they stay on
          * the beat; a hit frame lands one frame later). */
-        pev = dev = 0;
+        player_ev = dummy_ev = 0;
         if (started || ly >= VERY_LATE_LY) {
             carry_p = pticks > CARRY_MAX ? CARRY_MAX : pticks;
             carry_d = dticks > CARRY_MAX ? CARRY_MAX : dticks;
         } else {
             carry_p = 0;
             spriteanim_presents = !work && LY_REG < PRESENT_LIMIT_LY;
-            pev = spriteanim_update(&combat_player, pticks);
+            player_ev = spriteanim_update(&combat_player, pticks);
             if (!spriteanim_presents)
                 work = 1;
             /* the dummy waits (its ticks carried) when its update would cost a call on a busy frame */
             if (dticks < combat_dummy.anim.quiet || spriteanim_presents || carry_d >= CARRY_MAX) {
                 carry_d = 0;
-                dev = spriteanim_update(&combat_dummy, dticks);
+                dummy_ev = spriteanim_update(&combat_dummy, dticks);
                 if (!spriteanim_presents)
                     work = 1;
             } else {
                 carry_d = dticks;
             }
         }
-        if (pev & ANIM_EV_HIT) {
+        if (player_ev & ANIM_EV_HIT) {
             slide_finish();
             px = combat_px >> 4;
             py = combat_py >> 4;
             combat_on_hit_frame();
         }
-        if (pev & ANIM_EV_DONE) {
+        if (player_ev & ANIM_EV_DONE) {
             combat_busy = 0;
-            combat_attack = COMBO_NO_ATTACK;
+            combat_attack.attack = COMBO_NO_ATTACK;
         }
-        if (dev & ANIM_EV_DONE)
+        if (dummy_ev & ANIM_EV_DONE)
             combat_want |= WANT_DUMMY_IDLE;
 
         /* beats and musical timers (cheap, every frame) */
@@ -500,28 +553,39 @@ scene_t combat_scene(void) BANKED
             if (ticks >= combat_slowmo) {
                 combat_slowmo = 0;
                 fx_set_dim(0);
+                /* the dummy dropped ticks during slow-mo: a loop restarts in phase with the song (a
+                 * one-shot is followed by idle, which starts in phase anyway) */
+                if (combat_dummy.anim.flags & ANIM_LOOP)
+                    combat_want |= WANT_DUMMY_PHASE;
             } else {
                 combat_slowmo -= ticks;
             }
         }
-        if (combat_strike_grace && --combat_strike_grace == 0)
+        /* a strike's dodge grace ends good_window VBlanks after its beat, once every press read
+         * by then has reached the matcher (one may be the dodge) */
+        if (combat_strike_waits && drained &&
+            (uint8_t)(frame - combat_strike_frame) >= (uint8_t)tuning.timing_good_window) {
+            combat_strike_waits = 0;
             combat_strike_lands();
+        }
 
         if (!work && LY_REG < COSTLY_LIMIT_LY)
-            work = costly();
+            work = run_deferred_anim_job();
 
         /* movement and UI sprites; a very late frame skips them (they catch up next frame) */
         if (ly < VERY_LATE_LY) {
             solid_bounds();
             if (slide_left) {
                 if (!started) /* the lunge or dash moves from the anim's first shown frame */
-                    slide_step();
+                    slide_run(ticks);
             } else if (!combat_busy) {
                 walk();
             }
             px = combat_px >> 4;
             py = combat_py >> 4;
             combat_ui_update(ticks);
+        } else if (slide_left && !started) {
+            slide_ticks += ticks; /* the slide catches up next frame */
         }
         draw_world();
         hud_update();
@@ -534,7 +598,6 @@ scene_t combat_scene(void) BANKED
         if (edges & J_START) {
             vram_stream_vblank(0);
             fx_set_dim(0);
-            sfx_hit_step = 0;
             return SCENE_MENU;
         }
 #ifdef DEBUG

@@ -34,20 +34,25 @@ hud_metronome = 1    # [0..1] 1 = on (switches below too)
 hit_flash = 1        # [0..1]
 hit_flash_ticks = 6  # [0..24] how long a hit target flashes
 grade_popups = 1     # [0..1]
-musical_hits = 1     # [0..1] on-beat A/B presses play the song's hit instrument
+musical_hits = 1     # [0..1] combo steps that are not OFFBEAT play the song's hit instrument (pitch N for hit N)
+quantize_hits = 1    # [0..1] 1 = a musical hit sounds on its step slot's beat position (an early press waits for it); 0 = as soon as the step is known
 musical_hit_frames = 10   # [1..30] how long a musical hit holds P2 (frames: a sound length, not combat timing)
 musical_hit_volume = 15   # [1..15] musical hit volume
 popup_ticks = 36     # [8..96] how long a grade popup (and the dummy's strike mark) shows, in song ticks
+popup_rise_ticks = 8 # [1..48] a grade popup rises 1 px every this many song ticks
+break_sound_min_hits = 2  # [1..8] a string that breaks after at least this many hits plays the break sound (fewer break silently)
 
 # PROVISIONAL (M2 combat scene). Movement is per frame: it is not combat timing.
 [player]
 walk_speed = 16      # [4..48] walk speed in 1/16 px per frame (16 = 1 px; diagonals move 3/4 of it per axis)
 dodge_px = 16        # [0..48] how far a dodge dashes: in the held direction, else straight back
+slide_halflife_ticks = 2  # [1..24] a lunge or dodge dash eases out, covering half its remaining distance every this many song ticks
 
 # PROVISIONAL training dummy (M2). Real enemies, telegraphs and attack tokens are M3.
 [dummy]
 attack_every_beats = 16   # [0..64] beats from one "!" telegraph to the next; 0 = the dummy never attacks
 telegraph_beats = 2  # [1..8] beats from the telegraph to the strike (which lands on that beat)
+telegraph_blink_ticks = 36  # [0..48] the "!" telegraph shows for this many song ticks at the start of each beat (48 = steady)
 range_px = 24        # [0..64] the strike hurts a player whose feet are this close (screen px; y counts double)
 solid_w = 9          # [0..24] half-width of the dummy's footprint, which the player cannot walk into (px)
 solid_h = 5          # [0..16] half-height of that footprint (px)

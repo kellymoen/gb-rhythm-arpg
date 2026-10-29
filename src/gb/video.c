@@ -35,7 +35,7 @@ void video_init(void)
 
 void video_set_brightness(uint8_t level)
 {
-    BGP_REG = level == 1 ? DMG_LIGHT : level == 2 ? DMG_DARK : DMG_NORMAL;
+    BGP_REG = level == BRIGHTNESS_PULSE ? DMG_LIGHT : level == BRIGHTNESS_DIM ? DMG_DARK : DMG_NORMAL;
     if (_cpu == CGB_TYPE)
-        set_bkg_palette(0, 1, level == 1 ? light : level == 2 ? dark : normal);
+        set_bkg_palette(0, 1, level == BRIGHTNESS_PULSE ? light : level == BRIGHTNESS_DIM ? dark : normal);
 }

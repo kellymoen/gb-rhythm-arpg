@@ -37,16 +37,18 @@ void combat_events_init(void) BANKED
     dummy_count = 0;
 }
 
-static uint8_t hitstop_for(uint8_t grade)
-{
-    return (uint8_t)(grade == GRADE_PERFECT ? tuning.hitstop_perfect_ticks
-                     : grade == GRADE_GOOD  ? tuning.hitstop_good_ticks
-                                            : tuning.hitstop_offbeat_ticks);
-}
-
 uint8_t combat_dodging(void) BANKED
 {
     return combat_pending == PENDING_DODGE || (combat_busy && combat_player.action == SPRITE_PLAYER_DODGE);
+}
+
+/* A dodge read after the strike's beat still beats it if its press was judged at most good_window
+ * frames from the beat (by the press's own frame, so a slow main loop changes nothing). */
+static uint8_t late_dodge_in_time(void)
+{
+    int8_t d = (int8_t)(combat_press_frame - combat_strike_frame), w = (int8_t)tuning.timing_good_window;
+
+    return d >= -w && d <= w;
 }
 
 void combat_on_event(const combo_event_t *e) BANKED
@@ -59,16 +61,13 @@ void combat_on_event(const combo_event_t *e) BANKED
     case COMBO_EV_FINISH:
         a = &combos.attacks[e->attack];
         combat_pending = PENDING_ATTACK;
-        combat_pending_attack = e->attack;
-        combat_pending_grade = e->grade;
+        combat_next.attack = e->attack;
+        combat_next.grade = e->grade;
         if (e->type == COMBO_EV_FINISH)
-            combat_pending_heavy = 1;
+            combat_next.heavy = 1;
         /* the swing sounds at once; the hit sound waits for the hit frame */
         sfx_play(a->sfx != COMBO_NO_SFX ? combo_sfx[a->sfx]
-                 : combat_pending_heavy ? SFX_SWING_HEAVY : SFX_SWING_LIGHT);
-        /* the next on-beat press of this string plays the next HITS pitch (sfx.h); a finished
-         * string starts over */
-        sfx_hit_step = e->type == COMBO_EV_FINISH ? 0 : e->step + 1;
+                 : combat_next.heavy ? SFX_SWING_HEAVY : SFX_SWING_LIGHT);
         if (e->step == 0) {
             combat_stats.hits = 0;
             combat_ui_counters();
@@ -84,25 +83,24 @@ void combat_on_event(const combo_event_t *e) BANKED
         }
         break;
     case COMBO_EV_BREAK:
-        sfx_hit_step = 0;
         if (e->step) {
             combat_stats.breaks++;
             combat_ui_name(NAME_BREAK);
-            if (e->step >= 2) /* PROVISIONAL: a lone stray hit breaking makes no sound */
+            if (e->step >= (uint8_t)tuning.feedback_break_sound_min_hits) /* a stray hit breaks quietly */
                 sfx_play(SFX_STRING_BREAK);
         }
         break;
     case COMBO_EV_DODGE:
-        sfx_hit_step = 0;
         combat_pending = PENDING_DODGE;
         combat_stats.dodges++;
-        if (combat_strike_grace) { /* a late dodge still beats a strike inside the GOOD window */
-            combat_strike_grace = 0;
+        if (combat_strike_waits && late_dodge_in_time()) { /* inside the GOOD window */
+            combat_strike_waits = 0;
             combat_stats.strikes_dodged++;
         }
         if (e->grade == GRADE_PERFECT && tuning.slowmo_beats > 0) {
-            beats = (uint8_t)tuning.slowmo_beats;
-            combat_slowmo = ((uint16_t)beats << 5) + ((uint16_t)beats << 4); /* x BEAT_TICKS (48) */
+            /* slowmo.beats x BEAT_TICKS, by addition (no multiply helper) */
+            for (beats = (uint8_t)tuning.slowmo_beats, combat_slowmo = 0; beats; beats--)
+                combat_slowmo += BEAT_TICKS;
             fx_set_dim(1);
             combat_stats.slowmos++;
             sfx_play(SFX_PERFECT);
@@ -119,20 +117,18 @@ void combat_on_hit_frame(void) BANKED
 {
     box_t hb, hu;
     int16_t px = combat_px >> 4, py = combat_py >> 4, ax, ay, bx, by, d;
-    uint8_t atk = combat_attack, dmg, shift, hs;
+    uint8_t atk = combat_attack.attack, dmg, shift, hs;
 
     if (atk == COMBO_NO_ATTACK)
         return;
     if (!spriteanim_hitbox(&combat_player, &hb))
         return;
     spriteanim_hurtbox(&combat_dummy, &hu);
-    combat_attack = COMBO_NO_ATTACK; /* one hit per attack */
+    combat_attack.attack = COMBO_NO_ATTACK; /* one hit per attack */
     if (!hu.w || !hb.w)
         return;
     d = py - DUMMY_Y;
-    if (d < 0)
-        d = -d;
-    if (d > tuning.combat_hit_depth_px)
+    if (IABS(d) > tuning.combat_hit_depth_px)
         return;
     ax = px + hb.x;
     ay = py + hb.y;
@@ -142,7 +138,7 @@ void combat_on_hit_frame(void) BANKED
         return;
 
     dmg = combos.attacks[atk].damage;
-    if (combat_attack_grade == GRADE_OFFBEAT) {
+    if (combat_attack.grade == GRADE_OFFBEAT) {
         shift = (uint8_t)tuning.combat_offbeat_damage_shift;
         for (; shift && dmg; shift--)
             dmg >>= 1;
@@ -157,12 +153,13 @@ void combat_on_hit_frame(void) BANKED
 
     /* hitstop on both characters; the dummy's flinch starts when the frame budget allows and
      * carries the freeze with it */
-    hs = hitstop_for(combat_attack_grade);
+    hs = (uint8_t)BY_GRADE(combat_attack.grade, tuning.hitstop_perfect_ticks, tuning.hitstop_good_ticks,
+                           tuning.hitstop_offbeat_ticks);
     spriteanim_hitstop(&combat_player, hs);
     spriteanim_hitstop(&combat_dummy, hs);
     combat_dummy_hitstop = hs;
     combat_want = (combat_want & (uint8_t)~WANT_DUMMY_IDLE) | WANT_DUMMY_HURT;
-    sfx_play(combat_attack_heavy ? SFX_HIT_HEAVY : SFX_HIT);
+    sfx_play(combat_attack.heavy ? SFX_HIT_HEAVY : SFX_HIT);
     combat_flash();
 }
 
@@ -170,12 +167,11 @@ void combat_on_hit_frame(void) BANKED
 static void strike(void)
 {
     int16_t dx = (combat_px >> 4) - DUMMY_X, dy = (combat_py >> 4) - DUMMY_Y, range = tuning.dummy_range_px;
+    uint16_t pos;
 
     combat_stats.strikes++;
-    if (dx < 0)
-        dx = -dx;
-    if (dy < 0)
-        dy = -dy;
+    dx = IABS(dx);
+    dy = IABS(dy);
     sfx_play(SFX_SWING_HEAVY);
     if (dx > range || (dy << 1) > range) { /* a whiff: the mark shows in front of the dummy */
         combat_strike_mark(DUMMY_X + ((combat_px >> 4) < DUMMY_X ? -12 : 12), DUMMY_Y - 14);
@@ -188,8 +184,16 @@ static void strike(void)
         return;
     }
     /* a dodge pressed up to good_window frames late still counts (the press is graded against
-     * this beat, so it can be a perfect dodge) */
-    combat_strike_grace = (uint8_t)tuning.timing_good_window + 1;
+     * this beat, so it can be a perfect dodge). Counted in VBlanks (input_frame) from the one a
+     * press judged exactly on the beat is read on, as beat_judge counts: the loop may see the beat
+     * late, so step back the frames since the beat, rounded, by subtraction; then the latency
+     * offset. */
+    combat_strike_waits = 1;
+    combat_strike_frame = combat_frame + (int8_t)tuning.timing_latency_offset;
+    pos = (((uint16_t)combat_now.tick << 8) | combat_now.frac) + (combat_now.rate >> 1);
+    if (combat_now.rate)
+        for (; pos >= combat_now.rate; pos -= combat_now.rate)
+            combat_strike_frame--;
 }
 
 void combat_strike_lands(void) BANKED

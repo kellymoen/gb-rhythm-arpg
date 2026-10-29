@@ -1,6 +1,6 @@
 """Generate placeholder assets that follow the asset contract (ADR 0006), for the author to replace.
 
-    python -m gbtools.placeholders [--force] {song,combat,sfx,font,hud,popups,floor,all}
+    python -m gbtools.placeholders [--force] {song,combat,calib,sfx,font,hud,popups,floor,all}
 
 Every file is written as `<name>_genplaceholder.<ext>` (ADR 0007); the author replaces it by saving
 `<name>.<ext>` beside it. Never run by the build: it refuses to overwrite an existing placeholder
@@ -324,6 +324,32 @@ def combat(force: bool) -> None:
     _write("assets/music/combat.mid", force, lambda p: mid.save(p))
 
 
+CALIB_BPM = 110
+
+
+def calib(force: bool) -> None:
+    """calib.mid: the calibration screen's metronome, 110 BPM 4/4, a 1-bar loop and nothing else, so
+    every beat is unambiguous. A short high click on each beat (P1 on the fast-decaying hit_bell
+    program) over a closed hat for a sharp onset; beat 1 is accented, an octave higher and louder."""
+    ppq = 480
+    sixteenth = ppq // 4
+    mid = mido.MidiFile(type=1, ticks_per_beat=ppq)
+
+    conductor = mido.MidiTrack()
+    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(CALIB_BPM), time=0))
+    conductor.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
+    mid.tracks.append(conductor)
+
+    clicks, hats = [], []
+    for beat in range(4):
+        accent = beat == 0
+        clicks.append((beat * ppq, sixteenth, 96 if accent else 84, 127 if accent else 96))  # C7 / C6
+        hats.append((beat * ppq, sixteenth // 2, 42, 120 if accent else 80))
+    _midi_track(mid, "P1", 2, clicks)
+    _midi_track(mid, "NOISE", None, hats)
+    _write("assets/music/calib.mid", force, lambda p: mid.save(p))
+
+
 # --- sound effects (format: docs/sfx.md) -------------------------------------------------------
 
 SFX_HEADER = "# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/{name}.toml to replace it.\n"
@@ -549,10 +575,10 @@ def sfx(force: bool) -> None:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="python -m gbtools.placeholders")
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("what", choices=["song", "combat", "sfx", "font", "hud", "popups", "floor", "all"])
+    ap.add_argument("what", choices=["song", "combat", "calib", "sfx", "font", "hud", "popups", "floor", "all"])
     args = ap.parse_args(argv)
-    for name, fn in (("song", song), ("combat", combat), ("sfx", sfx), ("font", font), ("hud", hud),
-                     ("popups", popups), ("floor", floor)):
+    for name, fn in (("song", song), ("combat", combat), ("calib", calib), ("sfx", sfx), ("font", font),
+                     ("hud", hud), ("popups", popups), ("floor", floor)):
         if args.what in (name, "all"):
             fn(args.force)
     return 0
