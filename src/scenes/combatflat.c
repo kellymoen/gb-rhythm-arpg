@@ -72,7 +72,7 @@ beat_clock_t combat_now;
 int16_t combat_px, combat_py;
 uint8_t combat_busy;
 uint16_t combat_slowmo;
-uint8_t combat_strike_grace, combat_dummy_hitstop;
+uint8_t combat_frame, combat_press_frame, combat_strike_waits, combat_strike_frame, combat_dummy_hitstop;
 
 static anim_clock_t clock;
 static combo_t combo;
@@ -403,7 +403,7 @@ scene_t combat_scene(void) BANKED
     SPRITEANIM_INIT(&combat_dummy, dummy, TILE_WORLD_SPR, ENEMY_SLOT_TILES);
     combat_events_init();
     combo_reset(&combo);
-    combat_want = combat_pending = combat_busy = combat_strike_grace = 0;
+    combat_want = combat_pending = combat_busy = combat_strike_waits = 0;
     combat_attack = COMBO_NO_ATTACK;
     combat_slowmo = 0;
     slide_left = 0;
@@ -432,10 +432,12 @@ scene_t combat_scene(void) BANKED
         vsync();
         fx_update(); /* palettes first */
         music_now(&combat_now);
+        combat_frame = input_frame;
         ticks = anim_clock_ticks(&clock, &combat_now);
         ly = LY_REG;
         late = ly >= LATE_START_LY;
         work = late;
+        drained = 0;
 
         /* presses -> matcher. A late frame leaves them queued for the next one: their grade was
          * fixed in the ISR; what they show and their musical hit wait (the ISR still holds a hit
@@ -443,7 +445,7 @@ scene_t combat_scene(void) BANKED
          * before draining (dodge_grace timing); the tick waits while presses are still queued, so
          * it never resolves a held-back A whose B is still in the queue. */
         if (!late) {
-            frame = input_frame;
+            frame = combat_frame;
             drained = 1;
             while (1) {
                 if (LY_REG >= POP_LIMIT_LY) {
@@ -459,6 +461,7 @@ scene_t combat_scene(void) BANKED
                 in.dir = combo_dir(p.held);
                 in.frame = p.frame;
                 in.judgement = p.judgement;
+                combat_press_frame = p.frame;
                 n = combo_press(&combo, &in, evs);
                 schedule_hit();
                 handle(n);
@@ -543,8 +546,13 @@ scene_t combat_scene(void) BANKED
                 combat_slowmo -= ticks;
             }
         }
-        if (combat_strike_grace && --combat_strike_grace == 0)
+        /* a strike's dodge grace ends good_window VBlanks after its beat, once every press read
+         * by then has reached the matcher (one may be the dodge) */
+        if (combat_strike_waits && drained &&
+            (uint8_t)(frame - combat_strike_frame) >= (uint8_t)tuning.timing_good_window) {
+            combat_strike_waits = 0;
             combat_strike_lands();
+        }
 
         if (!work && LY_REG < COSTLY_LIMIT_LY)
             work = costly();

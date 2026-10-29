@@ -497,10 +497,10 @@ def test_dummy_strike_misses_a_player_out_of_range():
     c.stop()
 
 
-@pytest.mark.parametrize("error", [-2, 3])
+@pytest.mark.parametrize("error", [-2, 3, 6])
 def test_dodging_on_the_strike_beat_avoids_it(error):
-    """A dodge 2 frames early (dodging when the strike lands) or 3 frames late (inside the strike's
-    grace) avoids the strike; both are PERFECT, so slow-mo starts too."""
+    """A dodge 2 frames early (dodging when the strike lands) or 3 or 6 (good_window) frames late
+    (inside the strike's grace) avoids the strike."""
     c = strike_ready()
     while not telegraph_shown(c):
         c.step()
@@ -510,7 +510,43 @@ def test_dodging_on_the_strike_beat_avoids_it(error):
     c.check_judged()
     assert c.stat("strikes") == 1 and c.stat("strikes_dodged") == 1
     assert c.stat("player_hurts") == 0
-    assert c.stat("slowmos") == 1
+    assert c.stat("slowmos") == (1 if abs(error) <= 3 else 0)  # PERFECT dodges start slow-mo
+    c.stop()
+
+
+VSYNC = "f040e680c8afe0917600f091b728f9c9"  # GBDK's wait_vbl_done; its `ret` is at +15
+
+
+def run_main_loop_at_30fps(c: Combat) -> None:
+    """Every other vsync() waits for one more VBlank: the scene's loop runs at 30 fps while the
+    VBlank ISR (beat clock, input, sound) still runs at 60."""
+    v = c.syms["_vsync"]
+    assert bytes(c.pb.memory[v + i] for i in range(16)).hex() == VSYNC, "GBDK's vsync() changed"
+    calls = [0]
+
+    def wait_again(_):
+        calls[0] += 1
+        if calls[0] & 1:
+            c.pb.register_file.PC = v + 5  # back to `xor a; ldh (_vbl_done), a; halt`
+
+    c.pb.hook_register(0, v + 15, wait_again, None)
+
+
+@pytest.mark.parametrize("error,hurt", [(3, False), (6, False), (7, True)])
+def test_strike_grace_is_counted_in_vblanks(error, hurt):
+    """With the main loop at 30 fps, a late dodge still has to come within good_window (6) frames of
+    the strike's beat: the grace is counted in VBlanks, not in main-loop passes."""
+    c = strike_ready()
+    run_main_loop_at_30fps(c)
+    while not telegraph_shown(c):
+        c.step()
+    beat = c.clock()[0]
+    c.tap(("a", "b"), (beat + 1) * STEPS_PER_BEAT, error)
+    c.step(n=30)
+    c.check_judged()
+    assert c.stat("strikes") == 1 and c.stat("dodges") == 1
+    assert c.stat("player_hurts") == (1 if hurt else 0)
+    assert c.stat("strikes_dodged") == (0 if hurt else 1)
     c.stop()
 
 

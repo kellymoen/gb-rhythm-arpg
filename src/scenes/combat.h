@@ -83,7 +83,10 @@ extern beat_clock_t combat_now;
 extern int16_t combat_px, combat_py;   /* player feet, 1/16 screen px */
 extern uint8_t combat_busy;            /* the player is in an attack, dodge or hurt anim */
 extern uint16_t combat_slowmo;         /* song ticks of slow-mo left */
-extern uint8_t combat_strike_grace;    /* frames a strike waits for a late dodge before it lands */
+extern uint8_t combat_frame;           /* input_frame when the loop read combat_now */
+extern uint8_t combat_press_frame;     /* input_frame of the press the matcher is reading */
+extern uint8_t combat_strike_waits;    /* a strike in range waits for a dodge pressed up to... */
+extern uint8_t combat_strike_frame;    /* ...good_window VBlanks after this one, its beat's */
 extern uint8_t combat_dummy_hitstop;   /* hitstop for the dummy's hurt anim when it starts */
 
 /* combat_events.c */

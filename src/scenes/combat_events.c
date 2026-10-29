@@ -49,6 +49,15 @@ uint8_t combat_dodging(void) BANKED
     return combat_pending == PENDING_DODGE || (combat_busy && combat_player.action == SPRITE_PLAYER_DODGE);
 }
 
+/* A dodge read after the strike's beat still beats it if its press was judged at most good_window
+ * frames from the beat (by the press's own frame, so a slow main loop changes nothing). */
+static uint8_t late_dodge_in_time(void)
+{
+    int8_t d = (int8_t)(combat_press_frame - combat_strike_frame), w = (int8_t)tuning.timing_good_window;
+
+    return d >= -w && d <= w;
+}
+
 void combat_on_event(const combo_event_t *e) BANKED
 {
     const combo_attack_t *a;
@@ -91,8 +100,8 @@ void combat_on_event(const combo_event_t *e) BANKED
     case COMBO_EV_DODGE:
         combat_pending = PENDING_DODGE;
         combat_stats.dodges++;
-        if (combat_strike_grace) { /* a late dodge still beats a strike inside the GOOD window */
-            combat_strike_grace = 0;
+        if (combat_strike_waits && late_dodge_in_time()) { /* inside the GOOD window */
+            combat_strike_waits = 0;
             combat_stats.strikes_dodged++;
         }
         if (e->grade == GRADE_PERFECT && tuning.slowmo_beats > 0) {
@@ -165,6 +174,7 @@ void combat_on_hit_frame(void) BANKED
 static void strike(void)
 {
     int16_t dx = (combat_px >> 4) - DUMMY_X, dy = (combat_py >> 4) - DUMMY_Y, range = tuning.dummy_range_px;
+    uint16_t pos;
 
     combat_stats.strikes++;
     if (dx < 0)
@@ -183,8 +193,16 @@ static void strike(void)
         return;
     }
     /* a dodge pressed up to good_window frames late still counts (the press is graded against
-     * this beat, so it can be a perfect dodge) */
-    combat_strike_grace = (uint8_t)tuning.timing_good_window + 1;
+     * this beat, so it can be a perfect dodge). Counted in VBlanks (input_frame) from the one a
+     * press judged exactly on the beat is read on, as beat_judge counts: the loop may see the beat
+     * late, so step back the frames since the beat, rounded, by subtraction; then the latency
+     * offset. */
+    combat_strike_waits = 1;
+    combat_strike_frame = combat_frame + (int8_t)tuning.timing_latency_offset;
+    pos = (((uint16_t)combat_now.tick << 8) | combat_now.frac) + (combat_now.rate >> 1);
+    if (combat_now.rate)
+        for (; pos >= combat_now.rate; pos -= combat_now.rate)
+            combat_strike_frame--;
 }
 
 void combat_strike_lands(void) BANKED
