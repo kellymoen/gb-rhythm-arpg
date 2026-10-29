@@ -1,0 +1,201 @@
+#pragma bank 255
+
+#include <gb/gb.h>
+
+#include "gb/vram_stream.h"
+
+/* Banked, except the copy itself, which maps the tile data's bank and so lives in bank 0. */
+
+static vram_job_t *jobs[VRAM_STREAM_JOBS];
+static uint8_t job_count;
+uint8_t vram_stream_last_bytes;
+
+/* vs_copy() arguments and results (globals keep the asm free of calling-convention details). */
+static const uint8_t *vs_src;
+static uint8_t *vs_dst;
+static uint8_t vs_units;    /* in: units to copy; out: units not copied (deadline) */
+static uint8_t vs_deadline; /* stop before a scanline >= this starts (255: never) */
+
+/* Copy vs_units 2-byte units from vs_src to VRAM at vs_dst; leaves both pointers past the copy.
+ *
+ * LCD on: per scanline, wait for mode 3, then for its end (mode 0), then write 4 bytes; while STAT
+ * still reads mode 0, write 2 more at a time. Timing in M-cycles, T = mode 3 -> 0 transition: the
+ * wait loop sees mode 0 by T+7 and the 4th write lands by T+36. VRAM locks again when the next line's
+ * mode 3 starts, at least 87 dots (HBlank, with 10 OBJs on the line) + 80 dots (mode 2) = 41.75
+ * M-cycles after T. Each extra pair starts from a STAT read that saw mode 0 and writes within 14
+ * M-cycles, inside the 20-cycle mode 2 that must still follow. In VBlank (LY 144-152) it writes
+ * without waiting. Interrupts are off from the wait to the last write of the line (at most about one
+ * scanline), so an ISR can never split a wait from its writes. Before each scanline it stops if
+ * LY >= vs_deadline, leaving the rest in vs_units.
+ *
+ * LCD off: plain copy of everything. */
+static void vs_copy(void) NONBANKED __naked
+{
+    __asm
+        ld      hl, #_vs_dst
+        ld      e, (hl)
+        inc     hl
+        ld      d, (hl)
+        ld      hl, #_vs_units
+        ld      b, (hl)
+        ld      hl, #_vs_src
+        ld      a, (hl+)
+        ld      h, (hl)
+        ld      l, a
+        inc     b
+        dec     b
+        jr      z, 9$
+        ldh     a, (0x40)               ; LCDC
+        bit     7, a
+        jr      z, 8$
+1$:
+        ld      a, (_vs_deadline)
+        ld      c, a
+        ldh     a, (0x44)               ; LY
+        cp      a, c
+        jr      nc, 9$                  ; past the deadline: stop
+        ld      c, #0x41                ; STAT, for ldh a,(c)
+        di
+2$:                                     ; wait for mode 3, or VBlank
+        ldh     a, (0x44)               ; LY
+        cp      #144
+        jr      nc, 6$
+        ldh     a, (c)
+        and     #3
+        cp      #3
+        jr      nz, 2$
+3$:                                     ; wait for mode 3 to end
+        ldh     a, (c)
+        and     #3
+        jr      nz, 3$
+4$:                                     ; 4 bytes: safe in any HBlank
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        dec     b
+        jr      z, 7$
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        dec     b
+        jr      z, 7$
+5$:                                     ; 2 more while STAT still reads mode 0
+        ldh     a, (c)
+        and     #3
+        jr      nz, 10$
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        dec     b
+        jr      nz, 5$
+7$:
+        ei
+        jr      9$
+10$:
+        ei                              ; let a pending interrupt in between scanlines
+        jr      1$
+6$:                                     ; VBlank: lines 144-152 still have a full line left
+        cp      #153
+        jr      nc, 2$
+        jr      4$
+8$:                                     ; LCD off
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        dec     b
+        jr      nz, 8$
+9$:
+        ld      a, b
+        ld      (_vs_units), a
+        ld      a, l
+        ld      (_vs_src), a
+        ld      a, h
+        ld      (_vs_src + 1), a
+        ld      a, e
+        ld      (_vs_dst), a
+        ld      a, d
+        ld      (_vs_dst + 1), a
+        ret
+    __endasm;
+}
+
+/* Copy what the deadline allows of job j (its ROM bank mapped meanwhile). Returns units copied. */
+static uint8_t copy_job(vram_job_t *j) NONBANKED
+{
+    uint8_t saved = CURRENT_BANK, left = j->units;
+
+    SWITCH_ROM(j->bank);
+    vs_src = j->src;
+    vs_dst = j->dst;
+    vs_units = left;
+    vs_copy();
+    j->src = vs_src;
+    j->dst = vs_dst;
+    j->units = vs_units;
+    SWITCH_ROM(saved);
+    return left - vs_units;
+}
+
+void vram_stream_reset(void) BANKED
+{
+    job_count = 0;
+}
+
+void vram_stream_add(vram_job_t *j) BANKED
+{
+    j->state = VJ_IDLE;
+    j->units = 0;
+    if (job_count < VRAM_STREAM_JOBS)
+        jobs[job_count++] = j;
+}
+
+void vram_stream_submit(vram_job_t *j, uint8_t bank, const uint8_t *src, uint8_t tile, uint8_t tiles) NONBANKED
+{
+    j->state = VJ_IDLE; /* first, so nothing copies a half-written job */
+    j->bank = bank;
+    j->src = src;
+    j->dst = (uint8_t *)0x8000 + ((uint16_t)tile << 4);
+    j->units = tiles << 3; /* 16 bytes = 8 units per tile; tiles <= 31 */
+    j->state = j->units ? VJ_COPYING : VJ_READY;
+}
+
+uint8_t vram_stream_update(uint8_t deadline_ly) BANKED
+{
+    uint8_t i, ready = 0, units = 0;
+    vram_job_t *j;
+
+    vs_deadline = deadline_ly;
+    for (i = 0; i < job_count; i++) {
+        j = jobs[i];
+        if (j->state != VJ_COPYING)
+            continue;
+        units += copy_job(j);
+        if (j->units)
+            break; /* out of time */
+        j->state = VJ_READY;
+        ready++;
+    }
+    vram_stream_last_bytes = units << 1;
+    return ready;
+}
+
+void vram_copy_tiles(uint8_t tile, uint8_t bank, const uint8_t *src, uint8_t tiles) BANKED
+{
+    vram_job_t j;
+
+    vram_stream_submit(&j, bank, src, tile, tiles);
+    vs_deadline = 0xFF;
+    copy_job(&j);
+}
