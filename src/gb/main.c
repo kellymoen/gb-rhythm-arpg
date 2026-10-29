@@ -3,6 +3,7 @@
 #include "audio/music.h"
 #include "combos.h"
 #include "gb/isr.h"
+#include "gb/settings.h"
 #include "gb/text.h"
 #include "gb/video.h"
 #include "scenes/scene.h"
@@ -24,6 +25,7 @@ void main(void)
     DISPLAY_OFF;
     tuning_reset();
     combos_reset();
+    settings_load(); /* a saved calibration overrides the default latency offset */
     video_init();
     text_init();
     music_init();

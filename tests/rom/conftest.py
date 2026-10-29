@@ -1,5 +1,6 @@
 """Shared helpers for ROM tests: headless PyBoy runs, golden screenshots and symbol hooks."""
 
+import io
 import os
 from pathlib import Path
 
@@ -27,7 +28,10 @@ def boot(variant: str, sound: bool = False) -> PyBoy:
     rom = ROMS[variant]
     if not rom.exists():
         pytest.fail(f"{rom.relative_to(REPO)} missing; run `make test-rom` (it builds every variant)")
-    return PyBoy(str(rom), window="null", cgb=variant not in ("dmg",), sound_emulated=sound)
+    # Fresh, empty cartridge RAM: PyBoy would otherwise load <rom>.ram, leaking a saved calibration
+    # from an earlier run into every test.
+    return PyBoy(str(rom), window="null", cgb=variant not in ("dmg",), sound_emulated=sound,
+                 ram_file=io.BytesIO(bytes(0x20000)))
 
 
 def symbols(variant: str) -> dict[str, int]:

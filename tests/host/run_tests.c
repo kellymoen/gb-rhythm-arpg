@@ -24,6 +24,7 @@ void test_combo_perfect_dodge(void);
 void test_combo_tempo_independent(void);
 void test_combo_shipped_strings_all_play(void);
 void test_combo_table_in_ram(void);
+void test_calib(void);
 
 static void (*const tests[])(void) = {
     test_iso_project,
@@ -48,6 +49,7 @@ static void (*const tests[])(void) = {
     test_combo_tempo_independent,
     test_combo_shipped_strings_all_play,
     test_combo_table_in_ram,
+    test_calib,
 };
 
 int main(void)

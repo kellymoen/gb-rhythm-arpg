@@ -20,6 +20,8 @@ the author confirms or overturns it; then move it to "Settled" with the date, or
 | 12 | M2 | SFX file format (asset contract — please review) | One TOML per effect: `channel`, `priority`, up to 16 `[[step]]` tables. A step with `volume` retriggers the channel, and a step without it changes the running sound. Envelope, length, sweep and wave apply only on trigger steps | `docs/sfx.md` |
 | 13 | M2 | SFX channels and priorities | NOISE: swings 4/5, hits 6/7. P1: dodge 6, perfect 10, menu 3/4, calibration click 12. WAVE: string break 5. P2: musical hits 8 | `assets/sfx/*_genplaceholder.toml` |
 | 14 | M2 | Musical hit sound | 10 frames at volume 15. Combat song HITS set: A4 C5 D5 E5 G5 A5 C6 | `data/tuning.toml`, `assets/music/combat_genplaceholder.mid` |
+| 15 | M2 | Calibration | 16 taps on the rhythm-test song's beat (audio only, no visual cue). The median with halves rounded away from zero becomes the offset. Spread is the middle half and never blocks Accept. Musical hits are muted while calibrating | `src/scenes/calibrate.c` |
+| 16 | M2 | Timing overlay | 1 px per frame over ±15, the last 6 presses, Select toggles it, DEBUG only | `src/gb/overlay.c` |
 | 7 | M2 | Hitstop / flash / slow-mo amounts | Hitstop 8/5/2 ticks (PERFECT/GOOD/OFFBEAT), flash 6 ticks, slow-mo 2 beats at 1/2 enemy rate | `data/tuning.toml` |
 
 ## Settled

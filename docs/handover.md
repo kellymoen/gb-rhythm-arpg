@@ -25,5 +25,11 @@ Rewritten by the orchestrator at the end of every session, for the next one. Rea
   Instead, have each package agent run `git worktree add .claude/worktrees/<pkg> -b <pkg> <milestone
   branch>` itself and work only there.
 - Bank 0 holds about 8.6 KB of free space as of Wave 0; bank new code and data.
+- A `static` BANKED function crashes: bankpack leaves `b_<fn> = 255` for static symbols. Banked
+  functions must be global.
+- A song's first VBlank costs `music_update` about 100 scanlines, because every channel starts at
+  once. Don't restart a song mid-scene; start it while the LCD is off (in `scene_begin`/`scene_show`).
+- ROM tests boot with empty in-memory cartridge RAM (`conftest.boot`). PyBoy would otherwise load
+  `<rom>.ram`.
 - `UPDATE_GOLDEN=1` re-records every golden that a test asserts. If two tests share a golden name, the
   last one wins, so give each screen its own name.

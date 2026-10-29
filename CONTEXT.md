@@ -13,8 +13,9 @@ Use these terms in code, comments, data files and docs. If a new concept appears
 - **Window** — the ±frames that earn a grade (`perfect_window`, `good_window`).
 - **Latency offset** — frames subtracted from input time before grading, to compensate for
   emulator / display / audio lag. Zero on real hardware. The default is tuned for SameBoy.
-- **Calibration** — the shipped screen where the player taps A to a click and the median error
-  becomes their latency offset (saved to SRAM).
+- **Calibration** — the shipped screen where the player taps A on 16 beats of a song and the median
+  error becomes their latency offset (saved to battery SRAM).
+- **Spread** — the width of the middle half of calibration errors: how steady the taps were.
 - **Timing overlay** — DEBUG-only HUD strip plotting recent press errors against the windows.
 
 ## Combat
