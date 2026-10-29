@@ -82,9 +82,10 @@ static uint8_t divider, carry_p, carry_d;
 static int16_t px, py; /* the player's feet this frame, whole px */
 
 /* Slide: a lunge toward the dummy (per axis, stopping at contact) or a dodge dash (fixed direction).
- * It eases out, moving half the distance left each frame. */
+ * It eases out in song time, moving half the distance left every player.slide_halflife_ticks. */
 static uint8_t slide_left, slide_lunge;
 static int8_t slide_sx, slide_sy;
+static uint16_t slide_ticks; /* song ticks toward the next halving */
 
 /* combos.toml anim names -> player actions (generated X-macro lists). */
 #define ACTION(n) SPRITE_PLAYER_##n,
@@ -230,9 +231,24 @@ static void slide_step(void)
         return;
     }
     s = (int16_t)step << 4;
-    if (slide_sx && slide_sy)
+    if (slide_sx && slide_sy) /* geometry, not feel: a diagonal moves 3/4 per axis (~1/sqrt 2) */
         s -= s >> 2;
     move_by(slide_sx > 0 ? s : slide_sx < 0 ? -s : 0, slide_sy > 0 ? s : slide_sy < 0 ? -s : 0);
+}
+
+/* Advance the slide by `ticks` song ticks: one halving per slide_halflife_ticks (a few at most per
+ * frame, since each halves what is left). */
+static void slide_run(uint8_t ticks)
+{
+    uint8_t h = (uint8_t)tuning.player_slide_halflife_ticks;
+
+    if (!h)
+        h = 1;
+    slide_ticks += ticks;
+    while (slide_left && slide_ticks >= h) {
+        slide_ticks -= h;
+        slide_step();
+    }
 }
 
 /* Hit frames judge where the attack ends up: finish the lunge at once. */
@@ -278,6 +294,7 @@ static void start_pending(void)
         combat_attack_heavy = combat_pending_heavy;
         combat_stats.attacks_started++;
     }
+    slide_ticks = 0;
     combat_busy = 1;
     combat_pending = PENDING_NONE;
 }
@@ -332,7 +349,7 @@ static void walk(void)
     uint8_t held = input_held;
     int16_t s = tuning.player_walk_speed, mx = 0, my = 0;
 
-    if ((held & (J_LEFT | J_RIGHT)) && (held & (J_UP | J_DOWN)))
+    if ((held & (J_LEFT | J_RIGHT)) && (held & (J_UP | J_DOWN))) /* geometry: 3/4 per axis (~1/sqrt 2) */
         s -= s >> 2;
     if (held & J_RIGHT)
         mx = s;
@@ -562,13 +579,15 @@ scene_t combat_scene(void) BANKED
             solid_bounds();
             if (slide_left) {
                 if (!started) /* the lunge or dash moves from the anim's first shown frame */
-                    slide_step();
+                    slide_run(ticks);
             } else if (!combat_busy) {
                 walk();
             }
             px = combat_px >> 4;
             py = combat_py >> 4;
             combat_ui_update(ticks);
+        } else if (slide_left && !started) {
+            slide_ticks += ticks; /* the slide catches up next frame */
         }
         draw_world();
         hud_update();

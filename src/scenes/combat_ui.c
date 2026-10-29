@@ -22,9 +22,7 @@
 #define CELL_TILES 4
 #define CELL_FX 3
 #define POPUP_ABOVE 46     /* popup top, px above the player's feet */
-#define POPUP_RISE_SHIFT 3 /* rises 1 px per 8 song ticks */
 #define TELEGRAPH_ABOVE 46 /* "!" top, px above the dummy's feet */
-#define TELEGRAPH_BLINK (BEAT_TICKS * 3 / 4) /* shown for the first 3/4 of each beat */
 
 /* Hit flash: the dummy's parts switch to the second OBJ palette (DMG OBP1, CGB OBJ palette 1),
  * in which colours 1-2 are white and the outline stays dark. Both bits are set: each machine
@@ -44,8 +42,8 @@ static const palette_color_t flash_cgb[] = {
 #define NAME_W 16
 
 static vram_job_t popup_job;
-static uint8_t popup_cell, popup_ready, popup_on, popup_x, popup_y;
-static uint16_t popup_age;
+static uint8_t popup_cell, popup_ready, popup_on, popup_x, popup_y, popup_rise;
+static uint16_t popup_age, popup_rise_ticks;
 static uint8_t telegraph_on, strike_on, strike_x, strike_y;
 static uint16_t strike_age;
 static uint8_t flash_ticks;
@@ -107,6 +105,7 @@ void combat_popup(uint8_t grade) BANKED
     }
     popup_on = 1;
     popup_age = 0;
+    popup_rise = popup_rise_ticks = 0;
     popup_x = (uint8_t)((combat_px >> 4) - 8);
     popup_y = (uint8_t)((combat_py >> 4) - POPUP_ABOVE);
 }
@@ -147,7 +146,7 @@ static void flash_props(uint8_t on)
 
 void combat_ui_update(uint8_t ticks) BANKED
 {
-    uint8_t y, show;
+    uint8_t y, show, rise;
 
     if (popup_job.state == VJ_READY) {
         popup_job.state = VJ_IDLE;
@@ -156,10 +155,17 @@ void combat_ui_update(uint8_t ticks) BANKED
     y = 0;
     if (popup_on) {
         popup_age += ticks;
+        /* rises 1 px every feedback.popup_rise_ticks song ticks, counted by subtraction */
+        rise = (uint8_t)tuning.feedback_popup_rise_ticks;
+        popup_rise_ticks += ticks;
+        while (rise && popup_rise_ticks >= rise) {
+            popup_rise_ticks -= rise;
+            popup_rise++;
+        }
         if (popup_age >= (uint16_t)tuning.feedback_popup_ticks)
             popup_on = 0;
         else if (popup_ready)
-            y = popup_y - (uint8_t)(popup_age >> POPUP_RISE_SHIFT) + DEVICE_SPRITE_PX_OFFSET_Y;
+            y = popup_y - popup_rise + DEVICE_SPRITE_PX_OFFSET_Y;
     }
     if (y != popup_shown_y) {
         popup_shown_y = y;
@@ -172,7 +178,7 @@ void combat_ui_update(uint8_t ticks) BANKED
         }
     }
 
-    show = telegraph_on && combat_now.tick < TELEGRAPH_BLINK;
+    show = telegraph_on && combat_now.tick < (uint8_t)tuning.dummy_telegraph_blink_ticks;
     if (show != telegraph_shown) {
         telegraph_shown = show;
         if (show)

@@ -93,7 +93,7 @@ void combat_on_event(const combo_event_t *e) BANKED
         if (e->step) {
             combat_stats.breaks++;
             combat_ui_name(NAME_BREAK);
-            if (e->step >= 2) /* PROVISIONAL: a lone stray hit breaking makes no sound */
+            if (e->step >= (uint8_t)tuning.feedback_break_sound_min_hits) /* a stray hit breaks quietly */
                 sfx_play(SFX_STRING_BREAK);
         }
         break;

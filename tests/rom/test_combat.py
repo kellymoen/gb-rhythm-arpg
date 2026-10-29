@@ -36,6 +36,8 @@ STATS = {
     "strikes": (12, 1), "player_hurts": (13, 1), "strikes_dodged": (14, 1), "last_grade": (15, 1),
     "last_attack": (16, 1), "attacks_started": (17, 1),
 }
+PLAYER_START_X = 56  # src/scenes/combat.h
+DODGE_PX = 16  # player.dodge_px
 STRING = {"rush": 0, "pause": 1, "crush": 2, "crush_lunge": 3}  # COMBO_STRING_* (data/combos.toml)
 IDLE = 0xFF  # COMBO_IDLE
 GRADES = {"OFFBEAT": 0, "GOOD": 1, "PERFECT": 2}
@@ -408,6 +410,99 @@ def test_hit_latency(quantize):
     else:
         assert delays == {"early": DODGE_GRACE, "on time": DODGE_GRACE, "late": DODGE_GRACE}, delays
     c.stop()
+
+
+# --- feel params (data/tuning.toml) ------------------------------------------------------------------
+
+def sfx_ids(variant: str = "cgb") -> dict[str, int]:
+    header = (ROMS[variant].parent / "gen" / "sfx.h").read_text()
+    return {m[1]: int(m[2]) for m in re.finditer(r"#define SFX_(\w+) (\d+)", header)}
+
+
+def record_sfx(c: Combat) -> list[int]:
+    """Every sfx_play() request from now on (the id is in A)."""
+    played: list[int] = []
+    a = c.syms["_sfx_play"]
+    c.pb.hook_register(a >> 16, a & 0xFFFF, lambda _: played.append(c.pb.register_file.A), None)
+    return played
+
+
+@pytest.mark.parametrize("min_hits,sound", [(2, False), (1, True)])
+def test_break_sound_needs_min_hits(min_hits, sound):
+    """A lone hit that breaks plays SFX_STRING_BREAK only when feedback.break_sound_min_hits <= 1."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "feedback_break_sound_min_hits": min_hits})
+    played = record_sfx(c)
+    s = first_free_slot(c)
+    c.tap(("a",), s)
+    while c.slot_now() < s + 6:
+        c.step()
+    c.step(n=4)
+    assert c.stat("breaks") == 1
+    assert (sfx_ids()["STRING_BREAK"] in played) == sound
+    c.stop()
+
+
+def dash_track(halflife: int) -> list[int]:
+    """The player's x (1/16 px) on each of the 12 frames after a dodge (straight back, no target)."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "player_slide_halflife_ticks": halflife})
+    c.tap(("a", "b"), first_free_slot(c), error=5)  # GOOD: no slow-mo
+    xs = []
+    for _ in range(12):
+        c.step()
+        xs.append(c.u8("_combat_px") | c.u8("_combat_px", 1) << 8)
+    c.stop()
+    return xs
+
+
+def test_dash_eases_out_in_song_ticks():
+    """player.slide_halflife_ticks: the dash covers half of what is left every that many song ticks
+    (120 BPM: 1.6 ticks per frame). 24 ticks = 15 frames per halving, 2 ticks = about one a frame."""
+    start = PLAYER_START_X * 16
+    slow, fast = dash_track(24), dash_track(2)
+    assert start - fast[-1] == DODGE_PX * 16, "the default dash is over within 12 frames"
+    assert start - slow[-1] < DODGE_PX * 16 // 2, "a 24-tick half-life has not halved in 12 frames"
+    assert start - slow[-1] >= 0
+
+
+def popup_rise(rise_ticks: int) -> int:
+    """How far the grade popup rose (px) over the 16 frames after it first showed."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "feedback_popup_rise_ticks": rise_ticks,
+                      "feedback_popup_ticks": 96})
+    c.tap(("a",), first_free_slot(c))
+    while c.pb.memory[0xFE00 + 4 * 8] == 0:
+        c.step()
+    y0 = c.pb.memory[0xFE00 + 4 * 8]
+    c.step(n=16)
+    y1 = c.pb.memory[0xFE00 + 4 * 8]
+    c.stop()
+    return y0 - y1
+
+
+def test_popup_rises_by_popup_rise_ticks():
+    """16 frames at 120 BPM are ~26 song ticks: 3 px at 1 px per 8 ticks, ~13 px at 1 per 2."""
+    assert popup_rise(8) in (3, 4)
+    assert popup_rise(2) in (12, 13, 14)
+
+
+def telegraph_frames(blink: int) -> int:
+    """Frames the "!" shows during one 48-frame stretch of a telegraph that lasts several beats."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "dummy_telegraph_blink_ticks": blink})
+    c.set_tuning("dummy_telegraph_beats", 8)
+    c.set_tuning("dummy_attack_every_beats", 2)
+    while not telegraph_shown(c):
+        c.step()
+    shown = 0
+    for _ in range(60):  # two beats at 120 BPM
+        c.step()
+        shown += telegraph_shown(c)
+    c.stop()
+    return shown
+
+
+def test_telegraph_blink_length():
+    assert telegraph_frames(48) == 60, "48 ticks: shown the whole beat"
+    assert 40 <= telegraph_frames(36) <= 50, "36 ticks: the first 3/4 of each beat"
+    assert 12 <= telegraph_frames(12) <= 18, "12 ticks: the first quarter"
 
 
 # --- dodges and slow-mo ---------------------------------------------------------------------------
