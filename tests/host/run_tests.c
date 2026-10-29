@@ -9,6 +9,7 @@ void test_beat_clock_step(void);
 void test_beat_judge_grades(void);
 void test_beat_judge_latency_and_subdivision(void);
 void test_beat_ticks_until_slot(void);
+void test_calib(void);
 
 static void (*const tests[])(void) = {
     test_iso_project,
@@ -18,6 +19,7 @@ static void (*const tests[])(void) = {
     test_beat_judge_grades,
     test_beat_judge_latency_and_subdivision,
     test_beat_ticks_until_slot,
+    test_calib,
 };
 
 int main(void)
