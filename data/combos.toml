@@ -1,0 +1,94 @@
+# Combo strings and attacks (ADR 0004). Converted by tools/gbtools/combos.py into build/gen/combos.{c,h}
+# and combos.lab.json, so the feel lab can edit steps and attack values live (ADR 0008).
+# Every value here is PROVISIONAL until the author confirms it (docs/decisions-pending.md rows 1-3).
+#
+# [[attack]]: what one step does. Several steps (and strings) may share an attack.
+#   name    lower_snake_case, referenced from strings' `attacks`
+#   anim    player animation tag action (Aseprite `<anim>_<facing>`), e.g. light1, finisher, lunge
+#   damage  [0..99] hit points taken from the target (OFFBEAT steps deal damage >> offbeat_damage_shift)
+#   lunge   [0..48] px the soft lock may move the player toward the target (default 0)
+#   sfx     optional sound effect name (assets/sfx/<sfx>.toml); "" or missing = none
+#
+# [[string]]: one combo. Each step is one step slot (an 8th note by default):
+#   steps    up to 8 of: A (light), B (heavy), fA/fB bA/bB sA/sB (held forward / back / side),
+#            "." (a rest: that step slot must stay empty), "-" (end; only as trailing padding).
+#            A plain A or B accepts any held direction; a string with the direction variant wins
+#            over one without when that direction is held.
+#   attacks  one attack name per step, "" under rests. Strings that start with the same steps must
+#            use the same attacks until they diverge (the matcher can't know which one you're playing).
+#   unlock   [0..255] progression level that unlocks the string (0 = from the start; not enforced yet)
+
+[[attack]]
+name = "jab1"
+anim = "light1"
+damage = 2
+lunge = 4
+
+[[attack]]
+name = "jab2"
+anim = "light2"
+damage = 2
+lunge = 4
+
+[[attack]]
+name = "jab3"
+anim = "light3"
+damage = 2
+lunge = 4
+
+[[attack]]
+name = "jab4"
+anim = "light4"
+damage = 3
+lunge = 6
+
+[[attack]]
+name = "wide"
+anim = "finisher"
+damage = 8
+lunge = 8
+sfx = "swing_heavy"
+
+[[attack]]
+name = "smash1"
+anim = "heavy1"
+damage = 4
+lunge = 2
+
+[[attack]]
+name = "smash2"
+anim = "heavy2"
+damage = 7
+lunge = 4
+sfx = "swing_heavy"
+
+[[attack]]
+name = "lunge"
+anim = "lunge"
+damage = 7
+lunge = 24
+sfx = "swing_heavy"
+
+# Rush: a fast chain of four light hits.
+[[string]]
+name = "rush"
+steps   = ["A",    "A",    "A",    "A"]
+attacks = ["jab1", "jab2", "jab3", "jab4"]
+
+# Pause: two light hits, a rest, then a wide finisher.
+[[string]]
+name = "pause"
+steps   = ["A",    "A",    ".", "A"]
+attacks = ["jab1", "jab2", "",  "wide"]
+
+# Crush: heavy, rest, heavy.
+[[string]]
+name = "crush"
+steps   = ["B",      ".", "B"]
+attacks = ["smash1", "",  "smash2"]
+
+# Crush with forward held on the last hit: lunges at the target instead.
+[[string]]
+name = "crush_lunge"
+steps   = ["B",      ".", "fB"]
+attacks = ["smash1", "",  "lunge"]
