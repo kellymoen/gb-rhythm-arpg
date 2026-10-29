@@ -15,7 +15,7 @@ enum { CH_P1, CH_P2, CH_WAVE, CH_NOISE, CH_TEMPO, CH_COUNT };
 #define EV_DUTY 0x82  /* <0..3> */
 #define EV_BEND 0x83  /* <int8, 1/32 semitone, -64..64> */
 #define EV_VIB 0x84   /* <depth 0..15> */
-#define EV_TEMPO 0x85 /* <rate lo> <rate hi>, 8.8 ticks per frame */
+#define EV_TEMPO 0x85 /* <rate lo> <rate hi> <bpm>: rate is 8.8 ticks per frame, bpm for display */
 #define EV_LOOP 0x86
 #define EV_END 0x87
 #define EV_NOP 0x88 /* padding for waits longer than 255 ticks */

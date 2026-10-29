@@ -1,0 +1,11 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/menu_move.toml to replace it.
+# Menu cursor: a soft, short blip.
+channel = "P1"
+priority = 3
+
+[[step]]
+frames = 4
+volume = 7
+env_pace = 1
+duty = 2
+pitch = "A5"

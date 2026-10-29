@@ -1,0 +1,22 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/string_break.toml to replace it.
+# Combo string broke: a falling "bwow" on the wave channel with a square-ish shape. Volume drops in
+# three steps (the wave channel has 100/50/25% only); 'slide' bends the period down every frame.
+channel = "WAVE"
+priority = 5
+waves = ["FFFFFFFFFFFF00000000000000000000"]
+
+[[step]]
+frames = 4
+volume = 15
+pitch = "E3"
+slide = -6
+
+[[step]]
+frames = 6
+volume = 8
+slide = -10
+
+[[step]]
+frames = 6
+volume = 4
+slide = -12

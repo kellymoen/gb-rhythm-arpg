@@ -1,0 +1,38 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/perfect.toml to replace it.
+# Perfect dodge / slow-mo sting: a fast legato arpeggio (pitch changes without retriggering),
+# then the top note rings out with a duty shimmer.
+channel = "P1"
+priority = 10
+
+[[step]]
+frames = 3
+volume = 13
+duty = 1
+pitch = "E6"
+
+[[step]]
+frames = 3
+pitch = "G6"
+
+[[step]]
+frames = 3
+pitch = "B6"
+
+[[step]]
+frames = 4
+pitch = "E7"
+
+[[step]]
+frames = 6
+volume = 12
+env_pace = 3
+duty = 2
+pitch = "E7"
+
+[[step]]
+frames = 6
+duty = 1
+
+[[step]]
+frames = 12
+duty = 2

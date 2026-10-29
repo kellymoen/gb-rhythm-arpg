@@ -83,7 +83,7 @@ def write_midi(tmp_path, tracks, bpm=120, name="song", markers=()):
 def decode(stream: bytes):
     """Turn a stream back into (tick, op, args) tuples, following the layout in src/audio/song.h."""
     sizes = {music.EV_OFF: 0, music.EV_INSTR: 1, music.EV_DUTY: 1, music.EV_BEND: 1, music.EV_VIB: 1,
-             music.EV_TEMPO: 2, music.EV_LOOP: 0, music.EV_END: 0, music.EV_NOP: 0}
+             music.EV_TEMPO: 3, music.EV_LOOP: 0, music.EV_END: 0, music.EV_NOP: 0}
     out, i, tick = [], 0, stream[0]
     i = 1
     while True:
@@ -112,7 +112,7 @@ def test_pulse_notes_offs_and_loop_frame(tmp_path, ins):
     path = write_midi(tmp_path, {"P1": [(0, 0.5, 69, 127), (1, 1, 72, 64)]})
     song = music.convert_song(path, ins)
     ev = decode(song.streams[0])
-    assert ev[0][1] == music.EV_LOOP
+    assert music.EV_LOOP not in [op for _, op, _ in ev]  # a loop at the start needs no LOOP event
     assert notes(ev) == [(0, 69 - 36, 15), (48, 72 - 36, 8)]
     offs = [t for t, op, _ in ev if op == music.EV_OFF]
     assert offs[:2] == [24, 96]
@@ -123,7 +123,7 @@ def test_pulse_notes_offs_and_loop_frame(tmp_path, ins):
 def test_legato_drops_the_off_that_a_new_note_replaces(tmp_path, ins):
     path = write_midi(tmp_path, {"P1": [(0, 1, 60, 100), (1, 1, 62, 100)]})
     ev = decode(music.convert_song(path, ins).streams[0])
-    assert [t for t, op, _ in ev if op == music.EV_OFF] == [96, 192]
+    assert [t for t, op, _ in ev if op == music.EV_OFF] == [96]  # none at the end: the loop's note retriggers
 
 
 def test_wave_plays_an_octave_below_the_pulse_table(tmp_path, ins):
@@ -169,7 +169,7 @@ def test_tempo_changes_and_markers(tmp_path, ins):
     assert (4 * 48, music.EV_LOOP, ()) in ev
     assert ev[-1][0] == 8 * 48
     tempo = decode(song.streams[4])
-    assert (4 * 48, music.EV_TEMPO, tuple(music.tempo_rate(120).to_bytes(2, "little"))) in tempo
+    assert music.EV_TEMPO not in [op for _, op, _ in tempo]  # constant tempo: nothing to restore
 
 
 def test_hits_track_sets_pitches_and_instrument(tmp_path, ins):
@@ -211,3 +211,35 @@ def test_repo_music_converts():
     for path in (REPO / "assets/music").glob("*_genplaceholder.mid"):
         song = music.convert_song(path, ins)
         assert all(s[-1] == music.EV_END for s in song.streams)
+
+
+def test_combat_placeholder_changes_tempo_at_bar_5_and_loops_back():
+    ins = music.load_instruments(REPO / "assets/music/instruments_genplaceholder.toml")
+    song = music.convert_song(REPO / "assets/music/combat_genplaceholder.mid", ins)
+    assert song.name == "combat" and song.bpm == 120 and song.beats_per_bar == 4
+    tempo = decode(song.streams[4])
+    bar = 4 * 48
+    changes = [(t, args) for t, op, args in tempo if op == music.EV_TEMPO]
+    rate = lambda bpm: tuple(music.tempo_rate(bpm).to_bytes(2, "little")) + (bpm,)  # noqa: E731
+    assert changes == [(0, rate(120)), (4 * bar, rate(140))]  # loop restore, then bar 5
+    assert tempo[-1] == (8 * bar, music.EV_END, ())
+    # Every channel plays, the HITS set rises (hit N of a string plays pitch N) and the hit sound is a pulse.
+    assert all(notes(decode(s)) for s in song.streams[:4])
+    assert song.hits == sorted(song.hits) and len(song.hits) >= 5
+    assert ins.instruments[song.hit_instrument].kind == "pulse"
+
+
+def test_loop_frame_restores_only_what_the_song_changed(tmp_path, ins):
+    """Every event on the loop frame costs ISR time, so restores and OFFs appear only when needed."""
+    path = write_midi(tmp_path, {"P1": [(0, 1, 60, 100), ("bend", 6, 4096), (6, 1, 62, 100)],
+                                 "P2": [(1, 1, 60, 100)]}, markers=[(4, "loop"), (8, "end")])
+    song = music.convert_song(path, ins)
+    p1, p2 = decode(song.streams[0]), decode(song.streams[1])
+    at_loop = lambda ev: [(op, a) for t, op, a in ev if t == 4 * 48]  # noqa: E731
+    assert (music.EV_BEND, (0,)) in at_loop(p1)  # bent after the loop point: restored
+    assert [op for op, _ in at_loop(p2)] == [music.EV_LOOP]  # nothing changed: no restores
+    tempo = decode(song.streams[4])
+    assert music.EV_TEMPO not in [op for _, op, _ in tempo]  # one tempo throughout: song.rate covers it
+    # A note on the loop tick retriggers the channel, so the end needs no OFF.
+    looped = decode(music.convert_song(write_midi(tmp_path, {"P1": [(0, 1, 60, 100)]}, name="s2"), ins).streams[0])
+    assert [t for t, op, _ in looped if op == music.EV_OFF] == [48]
