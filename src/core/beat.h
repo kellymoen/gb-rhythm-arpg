@@ -35,6 +35,11 @@ typedef struct {
  * timing tuning params (steps_per_beat must divide BEAT_TICKS). */
 void beat_judge(const beat_clock_t *c, judgement_t *j);
 
+/* The step slot a press made at the clock's current position would be judged against (beat_judge's
+ * `slot`, latency offset included), without grading it. Cheap enough to call every frame: the
+ * combat scene feeds it to combo_tick. 0 when no song is playing. */
+uint16_t beat_slot_now(const beat_clock_t *c);
+
 /* Whole ticks from the clock's position until step slot `slot` (0 if it is now or past). */
 uint16_t beat_ticks_until_slot(const beat_clock_t *c, uint16_t slot);
 
