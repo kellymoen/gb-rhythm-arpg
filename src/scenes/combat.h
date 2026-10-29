@@ -63,6 +63,7 @@ extern combat_stats_t combat_stats;
 #define WANT_PLAYER_HURT 0x01
 #define WANT_DUMMY_HURT 0x02
 #define WANT_DUMMY_IDLE 0x04
+#define WANT_DUMMY_PHASE 0x08 /* restart the dummy's looping anim in phase with the song */
 extern uint8_t combat_want;
 
 /* The next player action the scheduler starts (an attack step or a dodge). */

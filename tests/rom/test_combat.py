@@ -547,6 +547,35 @@ def test_slowmo_halves_the_dummys_anim_rate():
     c.stop()
 
 
+def dummy_phase_error(c: Combat) -> int:
+    """How far (song ticks) the dummy's looping anim is from where the song says it should be."""
+    base, off = c.syms["_combat_dummy"], anim_pos_offset()
+    m = c.pb.memory
+    pos = m[base + off] | m[base + off + 1] << 8
+    count = m[base + off + 2]
+    ends = base + off - 32  # anim_t.ends[16] precede pos
+    length = m[ends + 2 * (count - 1)] | m[ends + 2 * (count - 1) + 1] << 8
+    beat, tick, _frac, _rate = c.clock()
+    err = (beat * BEAT_TICKS + tick - pos) % length
+    return min(err, length - err)
+
+
+def test_dummy_is_back_on_the_beat_after_slowmo():
+    """During slow-mo the dummy drops half its ticks; when it ends its idle loop restarts in phase."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    assert dummy_phase_error(c) <= 2
+    c.tap(("a", "b"), first_free_slot(c), error=0)
+    c.step(n=4)
+    assert c.stat("slowmos") == 1
+    c.step(n=20)
+    assert dummy_phase_error(c) > 8, "slow-mo should have put the dummy behind"
+    while c.u8("_combat_slowmo") | c.u8("_combat_slowmo", 1) << 8:
+        c.step()
+    c.step(n=6)
+    assert dummy_phase_error(c) <= 2, "the dummy stayed off the beat after slow-mo"
+    c.stop()
+
+
 def anim_pos_offset() -> int:
     """Byte offset of spriteanim_t.anim.pos (src/gb/spriteanim.h, src/core/anim.h): 3 pointers, 4
     bytes, then anim_t whose ends[16] (32 bytes) precede pos."""

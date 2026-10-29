@@ -313,7 +313,7 @@ static uint8_t costly(void)
         return 1;
     }
     if (combat_want & WANT_DUMMY_HURT) {
-        combat_want &= (uint8_t)~(WANT_DUMMY_HURT | WANT_DUMMY_IDLE);
+        combat_want &= (uint8_t)~(WANT_DUMMY_HURT | WANT_DUMMY_IDLE | WANT_DUMMY_PHASE);
         spriteanim_play(&combat_dummy, SPRITE_DUMMY_HURT, FACING_S, &combat_now);
         spriteanim_hitstop(&combat_dummy, combat_dummy_hitstop);
         carry_d = 0;
@@ -335,9 +335,10 @@ static uint8_t costly(void)
             return 1;
         }
     }
-    if (combat_want & WANT_DUMMY_IDLE) {
-        combat_want &= (uint8_t)~WANT_DUMMY_IDLE;
-        spriteanim_play(&combat_dummy, SPRITE_DUMMY_IDLE, FACING_S, &combat_now);
+    if (combat_want & (WANT_DUMMY_IDLE | WANT_DUMMY_PHASE)) {
+        f = combat_want & WANT_DUMMY_IDLE ? SPRITE_DUMMY_IDLE : combat_dummy.action;
+        combat_want &= (uint8_t)~(WANT_DUMMY_IDLE | WANT_DUMMY_PHASE);
+        spriteanim_play(&combat_dummy, f, FACING_S, &combat_now); /* loops start in phase */
         carry_d = 0;
         return 1;
     }
@@ -559,6 +560,10 @@ scene_t combat_scene(void) BANKED
             if (ticks >= combat_slowmo) {
                 combat_slowmo = 0;
                 fx_set_dim(0);
+                /* the dummy dropped ticks during slow-mo: a loop restarts in phase with the song (a
+                 * one-shot is followed by idle, which starts in phase anyway) */
+                if (combat_dummy.anim.flags & ANIM_LOOP)
+                    combat_want |= WANT_DUMMY_PHASE;
             } else {
                 combat_slowmo -= ticks;
             }
