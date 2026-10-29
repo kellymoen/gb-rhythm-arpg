@@ -329,3 +329,101 @@ void test_anim_loop_phase(void)
     CHECK_EQ(anim_loop_phase(&c, 96), 48);
     CHECK_EQ(anim_loop_phase(&c, 0), 0);
 }
+
+/* Turning to another drawn facing swaps the ends table but keeps the musical position, any hitstop
+ * and the done state; it redraws without re-reporting the hit. */
+void test_anim_retarget_keeps_position(void)
+{
+    static const uint16_t other_ends[] = { 6, 12, 18, 24 }; /* same 8th note, 4 frames */
+    anim_t a;
+    uint8_t ev;
+
+    anim_play(&a, light_ends, 3, 1, 0, 0);
+    anim_advance(&a, 0);
+    CHECK_EQ(anim_advance(&a, 9), ANIM_EV_FRAME | ANIM_EV_HIT);
+    anim_retarget(&a, other_ends, 4, 1, 0);
+    CHECK_EQ(a.pos, 9);
+    CHECK_EQ(a.frame, 1);
+    CHECK_EQ(anim_advance(&a, 0), ANIM_EV_FRAME); /* redraw, no second hit */
+    CHECK_EQ(anim_advance(&a, 3), ANIM_EV_FRAME); /* tick 12: frame 2 of the new table */
+    CHECK_EQ(a.frame, 2);
+
+    /* while frozen: the visible frame stays frozen (clamped to the new table) */
+    anim_hitstop(&a, 10);
+    anim_retarget(&a, light_ends, 3, 1, 0);
+    CHECK_EQ(a.mframe, 1);
+    CHECK_EQ(a.frame, 2);
+    CHECK_EQ(a.freeze, 10);
+    ev = anim_advance(&a, 0);
+    CHECK_EQ(ev, ANIM_EV_FRAME);
+    CHECK_EQ(a.frame, 2);
+    anim_advance(&a, 10); /* tick 22: freeze over, musical frame 2 */
+    CHECK_EQ(a.frame, 2);
+    CHECK_EQ(anim_advance(&a, 2), ANIM_EV_DONE);
+    anim_retarget(&a, other_ends, 4, 1, 0);
+    CHECK_EQ(anim_done(&a), 1);
+    CHECK_EQ(a.frame, 3);
+    CHECK_EQ(anim_advance(&a, 5), ANIM_EV_FRAME); /* no second DONE */
+
+    /* a loop wraps the kept position into the new length */
+    anim_play(&a, idle_ends, 2, ANIM_NO_HIT, ANIM_LOOP, 90);
+    anim_retarget(&a, light_ends, 3, ANIM_NO_HIT, ANIM_LOOP);
+    CHECK_EQ(a.pos, 90 - 3 * 24);
+    CHECK_EQ(a.frame, 2);
+}
+
+/* More frames than anim_t holds: the first 15 play on time, the last one fills the rest. */
+void test_anim_long_anims_clamp(void)
+{
+    uint16_t ends[20];
+    anim_t a;
+    uint8_t i;
+
+    for (i = 0; i < 20; i++)
+        ends[i] = (uint16_t)(i + 1) * 4;
+    anim_play(&a, ends, 20, 17, 0, 0);
+    CHECK_EQ(a.frame_count, ANIM_MAX_FRAMES);
+    anim_advance(&a, 0);
+    anim_advance(&a, 59);
+    CHECK_EQ(a.frame, 14);
+    anim_advance(&a, 1);
+    CHECK_EQ(a.frame, 15);
+    CHECK_EQ(anim_advance(&a, 19), 0);
+    CHECK_EQ(anim_advance(&a, 1), ANIM_EV_DONE); /* still ends at 80 ticks */
+}
+
+/* ANIM_ADVANCE_QUIET is the caller-side fast path: when it takes a step, anim_advance would have
+ * reported nothing. Two anims fed the same ticks, one through the fast path, never differ. */
+void test_anim_quiet_fast_path_matches(void)
+{
+    anim_t a, b;
+    unsigned f, fast = 0;
+    uint8_t t, ea, eb;
+
+    anim_play(&a, light_ends, 3, 1, 0, 0);
+    anim_play(&b, light_ends, 3, 1, 0, 0);
+    for (f = 0; f < 400; f++) {
+        t = (uint8_t)(f % 3); /* 0, 1, 2 ticks per frame */
+        if (f % 37 == 0) {
+            anim_play(&a, f % 74 ? light_ends : idle_ends, f % 74 ? 3 : 2, f % 74 ? 1 : ANIM_NO_HIT,
+                      f % 74 ? 0 : ANIM_LOOP, 0);
+            anim_play(&b, f % 74 ? light_ends : idle_ends, f % 74 ? 3 : 2, f % 74 ? 1 : ANIM_NO_HIT,
+                      f % 74 ? 0 : ANIM_LOOP, 0);
+        }
+        if (f % 53 == 10) {
+            anim_hitstop(&a, 6);
+            anim_hitstop(&b, 6);
+        }
+        ea = anim_advance(&a, t);
+        if (ANIM_ADVANCE_QUIET(&b, t)) {
+            eb = 0;
+            fast++;
+        } else {
+            eb = anim_advance(&b, t);
+        }
+        CHECK_EQ(eb, ea);
+        CHECK_EQ(b.frame, a.frame);
+        CHECK_EQ(b.pos, a.pos);
+    }
+    CHECK_EQ(fast > 200, 1);
+}

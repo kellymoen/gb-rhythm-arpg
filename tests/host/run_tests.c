@@ -9,7 +9,7 @@ void test_beat_clock_step(void);
 void test_beat_judge_grades(void);
 void test_beat_judge_latency_and_subdivision(void);
 void test_beat_ticks_until_slot(void);
-void test_anim_frames_follow_ends(void), test_anim_loops(void), test_anim_tempo_change_keeps_frames_on_the_beat(void), test_anim_one_shot_across_tempo_change(void), test_anim_hitstop_freezes_then_catches_up(void), test_anim_clock_ticks(void), test_anim_loop_phase(void);
+void test_anim_frames_follow_ends(void), test_anim_loops(void), test_anim_tempo_change_keeps_frames_on_the_beat(void), test_anim_one_shot_across_tempo_change(void), test_anim_hitstop_freezes_then_catches_up(void), test_anim_clock_ticks(void), test_anim_loop_phase(void), test_anim_retarget_keeps_position(void), test_anim_long_anims_clamp(void), test_anim_quiet_fast_path_matches(void);
 
 static void (*const tests[])(void) = {
     test_iso_project,
@@ -19,7 +19,7 @@ static void (*const tests[])(void) = {
     test_beat_judge_grades,
     test_beat_judge_latency_and_subdivision,
     test_beat_ticks_until_slot,
-    test_anim_frames_follow_ends, test_anim_loops, test_anim_tempo_change_keeps_frames_on_the_beat, test_anim_one_shot_across_tempo_change, test_anim_hitstop_freezes_then_catches_up, test_anim_clock_ticks, test_anim_loop_phase,
+    test_anim_frames_follow_ends, test_anim_loops, test_anim_tempo_change_keeps_frames_on_the_beat, test_anim_one_shot_across_tempo_change, test_anim_hitstop_freezes_then_catches_up, test_anim_clock_ticks, test_anim_loop_phase, test_anim_retarget_keeps_position, test_anim_long_anims_clamp, test_anim_quiet_fast_path_matches,
 };
 
 int main(void)

@@ -15,8 +15,20 @@
  * frame follows it, except during hitstop, when it freezes. When the freeze ends the visible frame
  * jumps straight to the musical one (catch-up), so the anim stays locked to the beat.
  *
- * On the Game Boy `ends` usually points into a switchable ROM bank: map that bank before anim_play()
- * and anim_advance(). Per-frame code: 8- and 16-bit adds and compares only. */
+ * Hitstop only shows on the attacker when the freeze outlasts the rest of the hit frame: catch-up
+ * then shortens or skips the frames after it.
+ *
+ * anim_play() and anim_retarget() copy `ends`. On the Game Boy it must be in RAM (this code runs from
+ * its own ROM bank): copy the ROM table into anim_t.ends and pass that. Per-frame code: 8- and 16-bit
+ * adds and compares only; ANIM_ADVANCE_QUIET lets callers skip the call on frames with no event. */
+
+/* Bank 0 is scarce and this code reads no ROM data, so under SDCC it lives in a switchable bank and
+ * is called with banked calls. (A compiler attribute, not a GBDK header: the host build ignores it.) */
+#ifdef __SDCC
+#define ANIM_FN __banked
+#else
+#define ANIM_FN
+#endif
 
 /* Same values as gb/spritedata.h, which this portable header cannot include (it needs GBDK). */
 #ifndef ANIM_LOOP
@@ -32,10 +44,11 @@
 #define ANIM_EV_DONE 0x04  /* a one-shot reached its end and no hitstop holds it; it now holds its
                             * last frame. Reported once. */
 
+#define ANIM_MAX_FRAMES 16 /* longer anims show their first 15 frames, then the last one */
+
 typedef struct {
-    const uint16_t *ends;
-    uint16_t len;     /* ends[frame_count - 1]: the whole anim in song ticks */
-    uint16_t pos;     /* song ticks since the start (loops wrap, one-shots stop at len) */
+    uint16_t ends[ANIM_MAX_FRAMES]; /* a RAM copy, so playback never needs the data's ROM bank */
+    uint16_t pos;     /* song ticks since the start (loops wrap, one-shots stop at the end) */
     uint8_t frame_count;
     uint8_t hit_frame;
     uint8_t flags;    /* ANIM_LOOP */
@@ -43,29 +56,40 @@ typedef struct {
     uint8_t frame;    /* visible frame */
     uint8_t freeze;   /* hitstop ticks left */
     uint8_t state;    /* internal */
+    uint8_t quiet;    /* ticks that may pass with nothing but pos changing (0: call anim_advance) */
 } anim_t;
 
 /* Start an anim `start` ticks in (0 = from its first frame; anim_loop_phase() for loops). The next
  * anim_advance() reports ANIM_EV_FRAME, plus ANIM_EV_HIT when it starts inside its hit frame.
  * Clears any hitstop. */
 void anim_play(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t hit_frame,
-               uint8_t flags, uint16_t start);
+               uint8_t flags, uint16_t start) ANIM_FN;
+
+/* Swap in another ends table of the same action (the character turned to another drawn facing),
+ * keeping the musical position, any hitstop and the done state. The next anim_advance() reports
+ * ANIM_EV_FRAME, never a second ANIM_EV_HIT. */
+void anim_retarget(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t hit_frame,
+                   uint8_t flags) ANIM_FN;
 
 /* Advance by `ticks` song ticks (see anim_clock_ticks). Returns ANIM_EV_* bits. */
-uint8_t anim_advance(anim_t *a, uint8_t ticks);
+uint8_t anim_advance(anim_t *a, uint8_t ticks) ANIM_FN;
+
+/* Caller-side fast path, for 8-bit targets where a call costs more than the work: if `t` ticks
+ * cannot cause any event, move the position and yield 1; else yield 0 and call anim_advance(). */
+#define ANIM_ADVANCE_QUIET(a, t) ((t) < (a)->quiet && ((a)->quiet -= (t), (a)->pos += (t), 1))
 
 /* Hitstop: freeze the visible frame for `ticks` song ticks from now (the longer of this and any
  * freeze already running). The musical position keeps moving underneath. */
-void anim_hitstop(anim_t *a, uint8_t ticks);
+void anim_hitstop(anim_t *a, uint8_t ticks) ANIM_FN;
 
 /* 1 once a one-shot is over (as reported by ANIM_EV_DONE). Loops never finish. */
-uint8_t anim_done(const anim_t *a);
+uint8_t anim_done(const anim_t *a) ANIM_FN;
 
 /* Start position that lines a looping anim up with the song, so a loop of k beats restarts on beats
  * that are multiples of k and a loop of a beat fraction restarts on that subdivision. Supports
  * lengths that divide BEAT_TICKS or are whole beats (k <= 255); any other length returns 0. Call
  * when an anim starts, not every frame (it has a short divide loop). */
-uint16_t anim_loop_phase(const beat_clock_t *now, uint16_t len);
+uint16_t anim_loop_phase(const beat_clock_t *now, uint16_t len) ANIM_FN;
 
 /* Song ticks elapsed between successive beat clock readings (music_now() on the Game Boy). */
 typedef struct {
@@ -74,11 +98,11 @@ typedef struct {
 } anim_clock_t;
 
 /* Remember `now` as the last reading. Call when a scene (or song) starts. */
-void anim_clock_sync(anim_clock_t *c, const beat_clock_t *now);
+void anim_clock_sync(anim_clock_t *c, const beat_clock_t *now) ANIM_FN;
 
 /* Ticks since the last reading, then remember `now`. Saturates at 255. A clock that went backwards
  * (the song restarted) or jumped more than ANIM_CLOCK_MAX_BEATS returns 0 and resyncs. */
 #define ANIM_CLOCK_MAX_BEATS 5
-uint8_t anim_clock_ticks(anim_clock_t *c, const beat_clock_t *now);
+uint8_t anim_clock_ticks(anim_clock_t *c, const beat_clock_t *now) ANIM_FN;
 
 #endif
