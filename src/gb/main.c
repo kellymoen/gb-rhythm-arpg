@@ -1,6 +1,7 @@
 #include <gb/gb.h>
 
 #include "audio/music.h"
+#include "combos.h"
 #include "gb/isr.h"
 #include "gb/text.h"
 #include "gb/video.h"
@@ -22,6 +23,7 @@ void main(void)
 
     DISPLAY_OFF;
     tuning_reset();
+    combos_reset();
     video_init();
     text_init();
     music_init();

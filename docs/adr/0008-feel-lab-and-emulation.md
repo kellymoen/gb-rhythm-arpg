@@ -31,7 +31,10 @@ generates the table also writes `build/gen/<table>.lab.json`:
 - `path` is the key path into the source TOML. Integers index arrays of tables, e.g.
   `["string", 0, "steps", 1]`.
 - `type` is one of `i8`, `u8`, `i16`, `u16` or `enum`. An `enum` field adds
-  `"values": {"A": 1, "B": 2, ...}` and is stored as a `u8`.
+  `"values": {"A": 1, "B": 2, ...}`, is stored as a `u8`, may give its `default` as a name, and
+  takes its range from `values`, so it needs no `min`/`max`.
+- `"absent": true` marks a slot the TOML doesn't spell out yet (e.g. a step past a string's end).
+  Saving one adds it only if its value differs from the default, padding arrays with the default.
 - Saving rewrites only the edited values and keeps the TOML's comments and layout.
 - The ROM reads its tables every frame, so a poke takes effect at once. A field that needs
   re-initialising says so with `"restart": true`.

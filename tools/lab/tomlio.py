@@ -23,6 +23,10 @@ def _walk(doc, path: tuple, file: Path):
     return node, path[-1]
 
 
+def _present(node, key) -> bool:
+    return key < len(node) if isinstance(key, int) else key in node
+
+
 def save_values(file: Path, edits: list[tuple[Field, int]]) -> int:
     """Set each field's value in `file`. Returns how many values actually changed.
 
@@ -36,11 +40,24 @@ def save_values(file: Path, edits: list[tuple[Field, int]]) -> int:
     changed = 0
     for f, value in edits:
         node, key = _walk(doc, f.path, file)
+        new = f.toml_value(value)
+        if f.absent and not _present(node, key):
+            # A slot the TOML doesn't spell out yet (ADR 0008 "absent"): leave it out while it
+            # still holds its default, otherwise add it, padding arrays with that default.
+            if value == f.default:
+                continue
+            if isinstance(key, int):
+                while len(node) < key:
+                    node.append(f.toml_value(f.default))
+                node.append(new)
+            else:
+                node[key] = new
+            changed += 1
+            continue
         try:
             old = node[key]
         except (KeyError, IndexError, TypeError) as e:
             raise ConvertError(file, f"'{f.label}' not found; the descriptor and the TOML disagree, rebuild") from e
-        new = f.toml_value(value)
         if old == new:
             continue
         trivia = node.item(key).trivia if hasattr(node, "item") else None

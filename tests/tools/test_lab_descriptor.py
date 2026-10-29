@@ -154,6 +154,31 @@ def test_save_nested_paths_arrays_of_tables_and_enum_names(tmp_path):
     assert "steps = [1, 2, 3]  # slots" in new  # the other string is untouched
 
 
+def test_enum_fields_take_their_range_from_values(tmp_path):
+    f = {"path": ["s"], "offset": 0, "type": "enum", "default": "B", "values": {"-": 0, "A": 1, "B": 2}}
+    (field,) = load_table(descriptor(tmp_path, [f])).fields
+    assert (field.min, field.max, field.default) == (0, 2, 2)
+
+
+def test_save_adds_absent_slots_padding_arrays_with_the_default(tmp_path):
+    src = tmp_path / "combos.toml"
+    src.write_text('[[string]]\nname = "rush"  # keep\nsteps = ["A", "A"]\n')
+    values = {"-": 0, "A": 1, "B": 2}
+    t = load_table(descriptor(tmp_path, [
+        {"path": ["string", 0, "steps", 3], "offset": 3, "type": "enum", "default": "-",
+         "values": values, "absent": True},
+        {"path": ["string", 0, "steps", 4], "offset": 4, "type": "enum", "default": "-",
+         "values": values, "absent": True},
+        {"path": ["string", 0, "sfx"], "offset": 9, "type": "u8", "default": 0, "min": 0, "max": 9,
+         "absent": True},
+    ]))
+    step3, step4, sfx = t.fields
+    assert save_values(src, [(step3, 2), (step4, 0), (sfx, 3)]) == 2
+    text = src.read_text()
+    assert 'steps = ["A", "A", "-", "B"]' in text
+    assert "sfx = 3" in text and "# keep" in text
+
+
 def test_save_errors_name_file_and_field(tmp_path):
     f = tmp_path / "t.toml"
     f.write_text(TOML)

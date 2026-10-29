@@ -22,6 +22,8 @@ Use these terms in code, comments, data files and docs. If a new concept appears
   direction modifier, or a **rest** (a deliberately empty step slot).
 - **String** — an ordered sequence of steps that produces a named combo, e.g. `A A . A`.
   Strings carry an `unlock` field for later RPG progression.
+- **Candidate** — a string the steps so far still fit; the matcher keeps every candidate alive until
+  the steps diverge.
 - **String grace** — how many unwritten empty step slots a string survives before it **breaks**.
 - **Attack** — what one step does: animation, damage, hitstop, lunge. Several steps may share one.
 - **Dodge** — `A+B` pressed together within `dodge_grace` frames.

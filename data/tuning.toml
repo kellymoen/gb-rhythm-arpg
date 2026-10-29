@@ -13,7 +13,7 @@ latency_offset = 0   # [-15..15] frames subtracted from input time before gradin
 dodge_grace = 2      # [0..6] max frames between A and B that still count as A+B
 
 [combat]
-lunge_px = 12        # [0..32] soft-lock lunge distance
+lunge_px = 24        # [0..48] cap on any attack's lunge (attacks set their own in data/combos.toml)
 string_grace = 1     # [0..4] unwritten empty step slots before a combo string breaks
 offbeat_damage_shift = 1  # [0..4] OFFBEAT steps deal damage >> this (1 = half)
 

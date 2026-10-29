@@ -15,6 +15,8 @@ the author confirms or overturns it; then move it to "Settled" with the date, or
 | 6 | M2 | Musical-hit pitch | Hit N of the current string plays pitch N of the song's HITS set; resets when the string ends (chosen by the author 2026-10-29, values still to tune) | `src/audio/sfx.h` `sfx_hit_step` |
 | 8 | M2 | Sprite tag data (asset contract) | `hit=<k>` is 1-based within the tag. `dur=<n>/<d>` is a fraction of a whole note: `1/4` = 1 beat, `dur=1` = 4 beats; `loop` marks looping tags; `optional` allows missing facings. Hitboxes come from a `hitbox:<tag>` slice (or per-frame `hitbox` keys) and exist only on the hit frame | `docs/sprites.md` |
 | 9 | M2 | Placeholder anim timings | Attacks 1/8 (finisher and heavies 1/4), idle 1/2 loop, walk 1/4 loop, dodge and hurt 1/8 | `assets/sprites/player_genplaceholder.aseprite` |
+| 10 | M2 | Combo details | Attacks jab1–4, wide, smash1–2, lunge with damage 2/2/2/3/8/4/7/7 and lunge 4/4/4/6/8/2/4/24 px. A plain step accepts any held direction; a direction variant wins only when its direction is held. A second press on a slot already taken does nothing. A dodge ends the string. A string may not be the start of a longer one. `unlock` is stored but not enforced | `data/combos.toml`, `src/core/combo.c` |
+| 11 | M2 | Lunge | `combat.lunge_px` is now a cap on per-attack lunge distances | `data/tuning.toml` |
 | 7 | M2 | Hitstop / flash / slow-mo amounts | Hitstop 8/5/2 ticks (PERFECT/GOOD/OFFBEAT), flash 6 ticks, slow-mo 2 beats at 1/2 enemy rate | `data/tuning.toml` |
 
 ## Settled

@@ -29,6 +29,7 @@ class Field:
     doc: str = ""
     values: dict[str, int] | None = None
     restart: bool = False
+    absent: bool = False  # not in the TOML yet (e.g. a step past a string's end); saving adds it
 
     @property
     def size(self) -> int:
@@ -97,7 +98,8 @@ def load_table(file: Path) -> Table:
         where = f"fields[{i}]"
         if not isinstance(raw, dict):
             _fail(file, where, "must be an object")
-        for key in ("path", "offset", "type", "default", "min", "max"):
+        required = ("path", "offset", "type", "default") + (() if raw.get("type") == "enum" else ("min", "max"))
+        for key in required:
             if key not in raw:
                 _fail(file, where, f"missing '{key}'")
         path = tuple(raw["path"])
@@ -125,11 +127,12 @@ def load_table(file: Path) -> Table:
             offset=raw["offset"],
             type=ftype,
             default=default,
-            min=raw["min"],
-            max=raw["max"],
+            min=raw.get("min", min(values.values()) if ftype == "enum" else None),
+            max=raw.get("max", max(values.values()) if ftype == "enum" else None),
             doc=raw.get("doc", ""),
             values=values,
             restart=bool(raw.get("restart", False)),
+            absent=bool(raw.get("absent", False)),
         )
         if not all(isinstance(x, int) and not isinstance(x, bool) for x in (f.offset, f.default, f.min, f.max)):
             _fail(file, where, "'offset', 'default', 'min' and 'max' must be integers")
