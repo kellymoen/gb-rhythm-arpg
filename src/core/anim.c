@@ -57,7 +57,7 @@ static void set_table(anim_t *a, const uint16_t *ends, uint8_t n, uint8_t hit_fr
 }
 
 void anim_play(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t hit_frame,
-               uint8_t flags, uint16_t start) ANIM_FN
+               uint8_t flags, uint16_t start) CORE_BANKED
 {
     a->freeze = 0;
     a->state = ST_START;
@@ -68,7 +68,7 @@ void anim_play(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t hit
 }
 
 void anim_retarget(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t hit_frame,
-                   uint8_t flags) ANIM_FN
+                   uint8_t flags) CORE_BANKED
 {
     set_table(a, ends, frame_count, hit_frame, flags);
     if (!a->freeze)
@@ -79,7 +79,7 @@ void anim_retarget(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t
     a->quiet = 0;
 }
 
-uint8_t anim_advance(anim_t *a, uint8_t ticks) ANIM_FN
+uint8_t anim_advance(anim_t *a, uint8_t ticks) CORE_BANKED
 {
     const uint16_t *e;
     uint16_t pos;
@@ -137,19 +137,19 @@ uint8_t anim_advance(anim_t *a, uint8_t ticks) ANIM_FN
     return ev;
 }
 
-void anim_hitstop(anim_t *a, uint8_t ticks) ANIM_FN
+void anim_hitstop(anim_t *a, uint8_t ticks) CORE_BANKED
 {
     if (ticks > a->freeze)
         a->freeze = ticks;
     a->quiet = 0;
 }
 
-uint8_t anim_done(const anim_t *a) ANIM_FN
+uint8_t anim_done(const anim_t *a) CORE_BANKED
 {
     return (a->state & ST_DONE) != 0;
 }
 
-uint16_t anim_loop_phase(const beat_clock_t *now, uint16_t len) ANIM_FN
+uint16_t anim_loop_phase(const beat_clock_t *now, uint16_t len) CORE_BANKED
 {
     uint16_t beats = 0, rest = len, r = 0, b = now->beat;
     uint8_t i, tick = now->tick;
@@ -186,13 +186,13 @@ uint16_t anim_loop_phase(const beat_clock_t *now, uint16_t len) ANIM_FN
     return (uint16_t)(r << 5) + (uint16_t)(r << 4) + tick; /* r * 48 + tick */
 }
 
-void anim_clock_sync(anim_clock_t *c, const beat_clock_t *now) ANIM_FN
+void anim_clock_sync(anim_clock_t *c, const beat_clock_t *now) CORE_BANKED
 {
     c->beat = now->beat;
     c->tick = now->tick;
 }
 
-uint8_t anim_clock_ticks(anim_clock_t *c, const beat_clock_t *now) ANIM_FN
+uint8_t anim_clock_ticks(anim_clock_t *c, const beat_clock_t *now) CORE_BANKED
 {
     uint16_t beats = now->beat - c->beat;
     int16_t total = (int16_t)now->tick - (int16_t)c->tick;

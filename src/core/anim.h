@@ -23,9 +23,7 @@
  * its own ROM bank): copy the ROM table into anim_t.ends and pass that. Per-frame code: 8- and 16-bit
  * adds and compares only; ANIM_ADVANCE_QUIET lets callers skip the call on frames with no event. */
 
-/* This code reads no ROM data, so it lives in a switchable bank (core/banked.h). ANIM_FN is the old name
- * of CORE_BANKED, kept until anim.c's definitions switch over. */
-#define ANIM_FN CORE_BANKED
+/* This code reads no ROM data, so it lives in a switchable bank (core/banked.h). */
 
 /* Same values as gb/spritedata.h, which this portable header cannot include (it needs GBDK). */
 #ifndef ANIM_LOOP
