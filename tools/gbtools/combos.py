@@ -5,7 +5,9 @@
 Every string is stored as COMBO_MAX_STEPS fixed-size step and attack slots so the feel lab can edit a
 pattern in place. Step byte: bits 0-1 button (1 = A, 2 = B, 3 = rest, 0 = end), bits 2-3 held direction
 (0 = any, 1 = forward, 2 = back, 3 = side; matches COMBO_DIR_* in src/core/combo.h). The matcher is
-src/core/combo.c; the schema is documented at the top of data/combos.toml.
+src/core/combo.c; the schema is documented at the top of data/combos.toml. A [[string]] may also set
+`label`, its on-screen name (default: the name upper-cased, `_` as a space; at most LABEL_MAX columns of
+the BG font), emitted as COMBO_STRING_LIST / COMBO_STRING_LABELS in combos.h for the combat UI.
 
 DEBUG builds (and host tests) keep a RAM copy `combos` that `combos_reset()` fills from the ROM
 defaults; release builds read the ROM table directly and `combos_reset()` is a no-op macro.
@@ -19,11 +21,12 @@ from pathlib import Path
 
 from gbtools import labdesc
 from gbtools.errors import ConvertError
-from gbtools.names import IDENT
+from gbtools.names import IDENT, display_name, label_problem
 
 MAX_STEPS = 8
 MAX_STRINGS = 8  # src/core/combo.c tracks candidate strings in one byte
 NONE = 0xFF
+LABEL_MAX = 12  # columns the combat UI gives a string's on-screen name
 RESERVED = {"count"}
 
 END, REST = 0x00, 0x03
@@ -34,7 +37,7 @@ TOKENS = {"-": END, ".": REST} | {
 }
 
 ATTACK_KEYS = ["name", "anim", "damage", "lunge", "sfx"]
-STRING_KEYS = ["name", "steps", "attacks", "unlock"]
+STRING_KEYS = ["name", "label", "steps", "attacks", "unlock"]
 DAMAGE = (0, 99)
 LUNGE = (0, 48)
 UNLOCK = (0, 255)
@@ -61,6 +64,7 @@ class String:
     attacks: list[int]  # MAX_STEPS attack indices, NONE under rests and ends
     tokens: list[str]  # the TOML step tokens, as written
     attack_names: list[str]  # the TOML attack names, as written
+    label: str = ""  # on-screen name: `label`, or the name upper-cased with spaces for underscores
 
 
 @dataclass
@@ -157,6 +161,7 @@ def _parse_string(path: Path, i: int, t: dict, seen: set[str], attack_names: lis
         raise ConvertError(
             path, f'{where}: attacks must be an array of attack names, e.g. ["jab1", "jab2", "", "wide"]')
     unlock = _int(path, where, t, "unlock", UNLOCK, default=0)
+    label = _label(path, where, t, name)
     if len(tokens) > MAX_STEPS:
         raise ConvertError(path, f"{where}: {len(tokens)} steps, at most {MAX_STEPS} fit; shorten it")
     if len(names) > len(tokens):
@@ -198,7 +203,23 @@ def _parse_string(path: Path, i: int, t: dict, seen: set[str], attack_names: lis
         raise ConvertError(
             path, f"{where} step {len(used)}: a string can't end with a rest; remove the trailing '.' "
             "(string_grace already lets the player pause)")
-    return String(name, unlock, steps, attacks, list(tokens), list(names))
+    return String(name, unlock, steps, attacks, list(tokens), list(names), label)
+
+
+def _label(path: Path, where: str, t: dict, name: str) -> str:
+    """The string's on-screen name, printed with the BG font (src/gb/text.h)."""
+    default = display_name(name)
+    if "label" not in t:
+        if problem := label_problem(default, LABEL_MAX):
+            raise ConvertError(path, f"{where}: its on-screen name '{default}' (the name upper-cased) {problem}; "
+                                     f'add a shorter label, e.g. label = "{default[:LABEL_MAX].rstrip()}"')
+        return default
+    label = t["label"]
+    if problem := label_problem(label, LABEL_MAX):
+        shown = f"'{label}'" if isinstance(label, str) else repr(label)
+        fix = "change it" if label_problem(default, LABEL_MAX) else f"change it, or remove label to show '{default}'"
+        raise ConvertError(path, f"{where}: label {shown} {problem}; {fix}")
+    return label
 
 
 def _length(s: String) -> int:
@@ -268,6 +289,8 @@ def render(c: Combos, source: str) -> tuple[str, str, str]:
     banner = f"/* Generated from {source} by tools/gbtools/combos.py. Do not edit. */\n"
     attack_names = [a.name for a in c.attacks]
     anim_list = " ".join(f"X({n.upper()})" for n in c.anims)
+    string_list = " ".join(f'X({s.name.upper()}, "{s.label}")' for s in c.strings)
+    string_labels = ", ".join(f'"{s.label}"' for s in c.strings)
     sfx_list = " ".join(f"X({n.upper()})" for n in c.sfx)
     header = (
         banner
@@ -286,6 +309,12 @@ def render(c: Combos, source: str) -> tuple[str, str, str]:
         + _enum("COMBO_ATTACK", attack_names) + "\n"
         + _enum("COMBO_ANIM", c.anims) + "\n"
         + _enum("COMBO_SFX", c.sfx) + "\n"
+        + "/* On-screen string names (data/combos.toml `label`, else the name upper-cased), at most\n"
+        + " * COMBO_LABEL_MAX columns of the BG font: X(NAME, \"LABEL\") in COMBO_STRING_* order. For a table:\n"
+        + " * static const char *const names[COMBO_STRING_COUNT] = COMBO_STRING_LABELS; */\n"
+        + f"#define COMBO_LABEL_MAX {LABEL_MAX}\n"
+        + f"#define COMBO_STRING_LIST(X) {string_list}\n"
+        + f"#define COMBO_STRING_LABELS {{ {string_labels} }}\n\n"
         + f"#define COMBO_ANIM_LIST(X) {anim_list}\n"
         + f"#define COMBO_SFX_LIST(X) {sfx_list}\n\n"
         + "typedef struct {\n"
