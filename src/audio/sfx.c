@@ -247,10 +247,9 @@ void sfx_update(void)
     SWITCH_ROM(saved);
 }
 
-void sfx_hit(void)
+void sfx_hit(uint8_t n)
 {
     const instrument_t *ins = &music_instruments[music_hit_instrument];
-    uint8_t n = sfx_hit_step;
     uint8_t note;
 
     if (!music_hit_count)

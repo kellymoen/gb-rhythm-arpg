@@ -433,3 +433,130 @@ void test_combo_table_in_ram(void)
     CHECK_EQ(memcmp(&combos, &combos_defaults, sizeof combos), 0);
     tuning_reset();
 }
+
+/* --- musical hits: combo_hit() names the step a press became at once, even while it is held back --- */
+
+static combo_input_t at(uint8_t buttons, uint8_t at_frame, uint16_t slot, grade_t grade)
+{
+    combo_input_t in;
+
+    in.buttons = buttons;
+    in.dir = COMBO_DIR_NONE;
+    in.frame = at_frame;
+    in.judgement.grade = grade;
+    in.judgement.frames = 0;
+    in.judgement.slot = slot;
+    return in;
+}
+
+#define HIT_TYPE() (combo_hit(&c)->ev.type)
+
+static void land(void)
+{
+    combo_land(&c);
+}
+#define CHECK_HIT(type_, step_)                       \
+    do {                                              \
+        CHECK_EQ(HIT_TYPE(), type_);                  \
+        CHECK_EQ(combo_hit(&c)->ev.step, step_);      \
+    } while (0)
+
+void test_combo_hits(void)
+{
+    combo_input_t in;
+
+    setup(1, 2);
+    /* A held-back press lands provisionally when the scene asks (combo_land), which names its step
+     * (the pitch) and press straight away; its events still wait for dodge_grace. */
+    in = at(A_, 10, 10, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 0);
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE);
+    land();
+    CHECK_HIT(COMBO_EV_STEP, 0);
+    CHECK_EQ(combo_hit(&c)->ev.grade, GRADE_PERFECT);
+    CHECK_EQ(combo_hit(&c)->slot, 10);
+    CHECK_EQ(combo_hit(&c)->frame, 10);
+    CHECK_EQ(combo_hit(&c)->buttons, A_);
+    land();
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE); /* reported once */
+    CHECK_EQ(tick_at(10, 12), 1);
+    CHECK_EV(0, COMBO_EV_STEP, RUSH, 0, 0);
+    in = at(A_, 20, 11, GRADE_GOOD);
+    combo_press(&c, &in, ev);
+    land();
+    CHECK_HIT(COMBO_EV_STEP, 1);
+    CHECK_EQ(combo_hit(&c)->ev.grade, GRADE_GOOD);
+
+    /* A press on the slot already taken is no step: no hit. The A before it commits. */
+    in = at(A_, 21, 11, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 1);
+    CHECK_EV(0, COMBO_EV_STEP, RUSH, 1, 1);
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE);
+    land();
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE);
+    CHECK_EQ(tick_at(11, 23), 0); /* and it lands as nothing */
+
+    /* B within dodge_grace of a held A that landed: a dodge undoes the A and cancels its hit. */
+    in = at(A_, 30, 12, GRADE_PERFECT);
+    combo_press(&c, &in, ev);
+    land();
+    CHECK_HIT(COMBO_EV_STEP, 2);
+    in = at(B_, 32, 12, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 2);
+    CHECK_EV(0, COMBO_EV_BREAK, RUSH, 2, NA); /* the string as it was before the A */
+    CHECK_EV(1, COMBO_EV_DODGE, COMBO_IDLE, 0, NA);
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_DODGE);
+    CHECK_EQ(tick_at(12, 40), 0);
+
+    /* B before the A was landed: the same dodge, with no hit to cancel. */
+    setup(1, 2);
+    in = at(A_, 10, 10, GRADE_PERFECT);
+    combo_press(&c, &in, ev);
+    in = at(B_, 11, 10, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 1);
+    CHECK_EV(0, COMBO_EV_DODGE, COMBO_IDLE, 0, NA);
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE);
+
+    /* A+B together: a dodge with no hit. */
+    in = at(A_ | B_, 50, 20, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 1);
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE);
+
+    /* A press that breaks one string and starts another plays the new string's first pitch. */
+    setup(1, 2);
+    in = at(A_, 10, 10, GRADE_PERFECT);
+    combo_press(&c, &in, ev);
+    in = at(A_, 20, 11, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 1); /* the first A lands and commits here */
+    CHECK_HIT(COMBO_EV_STEP, 0);
+    land();
+    CHECK_HIT(COMBO_EV_STEP, 1);
+    in = at(B_, 30, 12, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 1);
+    CHECK_EQ(tick_at(12, 32), 2); /* not landed early: the commit lands it */
+    CHECK_HIT(COMBO_EV_STEP, 0);
+    CHECK_EV(0, COMBO_EV_BREAK, RUSH, 2, NA);
+    CHECK_EV(1, COMBO_EV_STEP, CRUSH, 0, 5);
+
+    /* A dodge that undoes a press that became no step leaves an earlier hit alone. */
+    setup(1, 2);
+    in = at(A_, 10, 10, GRADE_PERFECT);
+    combo_press(&c, &in, ev);
+    land();
+    in = at(A_, 11, 10, GRADE_PERFECT); /* same slot: commits the first A, lands as nothing */
+    CHECK_EQ(combo_press(&c, &in, ev), 1);
+    land();
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE);
+    in = at(B_, 12, 10, GRADE_PERFECT);
+    CHECK_EQ(combo_press(&c, &in, ev), 2);
+    CHECK_EQ(ev[1].type, COMBO_EV_DODGE);
+    CHECK_EQ(HIT_TYPE(), COMBO_EV_NONE);
+
+    /* The finisher's hit is a FINISH; with dodge_grace 0 presses land at once and say so too. */
+    setup(1, 0);
+    press(B_, 10);
+    CHECK_HIT(COMBO_EV_STEP, 0);
+    CHECK_EQ(press(B_, 12), 1);
+    CHECK_EV(0, COMBO_EV_FINISH, CRUSH, 1, 6);
+    CHECK_HIT(COMBO_EV_FINISH, 1);
+}

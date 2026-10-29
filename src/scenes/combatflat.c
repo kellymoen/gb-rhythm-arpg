@@ -10,6 +10,7 @@
 #include "gb/fx.h"
 #include "gb/hud.h"
 #include "gb/input.h"
+#include "gb/isr.h"
 #include "gb/oam.h"
 #include "gb/overlay.h"
 #include "gb/spriteanim.h"
@@ -27,8 +28,8 @@
  *
  * Frame order and budget (docs/perf.md, "M2 combat scene"):
  *   1. palette (fx), beat clock
- *   2. presses -> combo matcher, matcher tick -> events. Grading already happened in the VBlank ISR,
- *      on the press's own frame, with its musical hit: nothing here can delay either.
+ *   2. presses -> combo matcher (which schedules each step's musical hit at once), matcher tick ->
+ *      events. Grading already happened in the VBlank ISR, on the press's own frame.
  *   3. the player's next attack or dodge starts (what matters most for feel goes first)
  *   4. anims advance (at most one new frame shown per video frame), hit frames are judged
  *   5. beat work (dummy telegraph and strike), slow-mo countdown
@@ -50,6 +51,7 @@
 #define VERY_LATE_LY 64        /* ...and at or after this one only draws (anims and movement wait) */
 #define POP_LIMIT_LY 64        /* another press is fed to the matcher only before this line */
 #define TICK_LIMIT_LY 80       /* the matcher's tick only runs before this line */
+#define LAND_LIMIT_LY 44       /* a held-back press lands early (its musical hit) before this line */
 #define START_LIMIT_LY 68      /* the player's attack or dodge only starts before this line */
 #define PRESENT_LIMIT_LY 60    /* a new anim frame is only shown before this line */
 #define COSTLY_LIMIT_LY 64     /* step 6 only starts before this line */
@@ -352,6 +354,31 @@ static void draw_world(void)
     oam_end();
 }
 
+/* Musical hits (gb/isr.h): the step a press became plays its HITS pitch. The matcher decides it
+ * as soon as the press lands (provisionally, in the tick on the press's own frame, while it still
+ * holds the press back for dodge_grace); a dodge that undoes it cancels the hit. OFFBEAT steps play
+ * none. Call after every combo_press and combo_tick. */
+static void schedule_hit(void)
+{
+    const combo_hit_t *h = combo_hit(&combo);
+
+    if (h->ev.type == COMBO_EV_DODGE)
+        isr_hit_cancel();
+    else if (h->ev.type != COMBO_EV_NONE && h->ev.grade != GRADE_OFFBEAT)
+        isr_hit_schedule(h->ev.step, h->slot, h->frame, h->buttons);
+}
+
+/* Will `t` more ticks take the player's attack into its hit frame (and the frame do the hit's work)? */
+static uint8_t hit_frame_due(uint8_t t)
+{
+    const anim_t *a = &combat_player.anim;
+    uint8_t k = a->hit_frame;
+
+    if (combat_attack == COMBO_NO_ATTACK || k == ANIM_NO_HIT || !k || a->mframe >= k)
+        return 0;
+    return a->pos + t >= a->ends[k - 1];
+}
+
 static void handle(uint8_t n)
 {
     uint8_t i;
@@ -365,7 +392,7 @@ scene_t combat_scene(void) BANKED
 {
     press_t p;
     combo_input_t in;
-    uint8_t ticks, pticks, dticks, work, late, drained, started, pev, dev, frame, edges, ly;
+    uint8_t ticks, pticks, dticks, work, late, drained, started, pev, dev, frame, edges, ly, n;
 
     scene_begin();
     hud_init();
@@ -381,7 +408,6 @@ scene_t combat_scene(void) BANKED
     combat_slowmo = 0;
     slide_left = 0;
     divider = carry_p = carry_d = 0;
-    sfx_hit_step = 0;
     fx_set_dim(0);
     combat_px = PLAYER_START_X << 4;
     combat_py = PLAYER_START_Y << 4;
@@ -411,8 +437,9 @@ scene_t combat_scene(void) BANKED
         late = ly >= LATE_START_LY;
         work = late;
 
-        /* presses -> matcher. A late frame leaves them queued for the next one: their grade and
-         * musical hit were fixed in the ISR, only what they show waits. The frame counter is read
+        /* presses -> matcher. A late frame leaves them queued for the next one: their grade was
+         * fixed in the ISR; what they show and their musical hit wait (the ISR still holds a hit
+         * back for a dodge it saw itself). The frame counter is read
          * before draining (dodge_grace timing); the tick waits while presses are still queued, so
          * it never resolves a held-back A whose B is still in the queue. */
         if (!late) {
@@ -432,10 +459,22 @@ scene_t combat_scene(void) BANKED
                 in.dir = combo_dir(p.held);
                 in.frame = p.frame;
                 in.judgement = p.judgement;
-                handle(combo_press(&combo, &in, evs));
+                n = combo_press(&combo, &in, evs);
+                schedule_hit();
+                handle(n);
             }
-            if (drained && LY_REG < TICK_LIMIT_LY)
-                handle(combo_tick(&combo, &combat_now, frame, evs));
+            if (drained && LY_REG < TICK_LIMIT_LY) {
+                n = combo_tick(&combo, &combat_now, frame, evs);
+                schedule_hit();
+                handle(n);
+                /* a held-back press lands now, so its musical hit is known, unless the player's
+                 * hit frame is due this frame too (both together don't fit; it lands next frame,
+                 * still within dodge_grace, or when it commits) */
+                if (LY_REG < LAND_LIMIT_LY && !hit_frame_due(ticks + carry_p)) {
+                    combo_land(&combo);
+                    schedule_hit();
+                }
+            }
         }
 
         /* The player's attack or dodge first. Its anim then advances from the next frame, with
@@ -534,7 +573,6 @@ scene_t combat_scene(void) BANKED
         if (edges & J_START) {
             vram_stream_vblank(0);
             fx_set_dim(0);
-            sfx_hit_step = 0;
             return SCENE_MENU;
         }
 #ifdef DEBUG

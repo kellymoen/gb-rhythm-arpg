@@ -152,12 +152,38 @@ class Combat(Driver):
         self.variant = variant
         self.offsets = tuning_offsets(variant)
         self.rom_judged: list[tuple[int, int]] = []
+        self.judged_at: list[int] = []  # the frame of every ROM judgement (a press read by the ISR)
         a = self.syms["_beat_judge"]
-        pb.hook_register(a >> 16, a & 0xFFFF, lambda _: self.rom_judged.append(judge(*self.clock())), None)
+        pb.hook_register(a >> 16, a & 0xFFFF, lambda _: self.on_judge(), None)
+        self.hits: list[tuple[int, int, tuple]] = []  # musical hits: (frame, HITS pitch, clock)
+        self.hit_frames: list[tuple[int, tuple]] = []
+        a = self.syms["_sfx_hit"]
+        pb.hook_register(a >> 16, a & 0xFFFF,
+                         lambda _: self.hit_frames.append((self.frame, self.clock())), None)
+        self.tick = self.tick_and_read_hits
         enter_scene(pb, "combat")
         for name, value in (pokes or {}).items():
             self.set_tuning(name, value)
         self.step(n=SETTLE)
+
+    def tick_and_read_hits(self) -> None:
+        """Tick; if a musical hit started, read its pitch back from the P2 channel it plays on."""
+        self.pb.tick(1, True)
+        while len(self.hits) < len(self.hit_frames):
+            frame, clock = self.hit_frames[len(self.hits)]
+            self.hits.append((frame, self.hit_pitch(), clock))
+
+    def hit_pitch(self) -> int:
+        m, chan = self.pb.memory, self.syms["_sfx_chan"] + 12  # sfx_chan[CH_P2], 12 bytes each
+        assert m[chan + 2] == 8, "no musical hit on P2 (SFX_HIT_PRIORITY)"
+        freq = m[chan + 6] | m[chan + 7] << 8
+        table = self.syms["_music_note_freq"]
+        hits = [m[self.syms["_music_hits"] + i] for i in range(m[self.syms["_music_hit_count"]])]
+        return [m[table + 2 * n] | m[table + 2 * n + 1] << 8 for n in hits].index(freq)
+
+    def on_judge(self) -> None:
+        self.rom_judged.append(judge(*self.clock()))
+        self.judged_at.append(self.frame)
 
     def set_tuning(self, name: str, value: int) -> None:
         a = self.syms["_tuning"] + self.offsets[name]
@@ -275,6 +301,112 @@ def test_string_breaks_after_grace():
     c.step(n=12)
     assert c.stat("hits") == 1, "the next press did not start a new string"
     c.check_judged()
+    c.stop()
+
+
+# --- musical hits ----------------------------------------------------------------------------------
+
+DODGE_GRACE = 2  # input.dodge_grace (data/tuning.toml)
+
+
+def slot_start(slot: int) -> int:
+    """Song position of a step slot's start, in 1/256 ticks."""
+    return slot * SLOT_TICKS * 256
+
+
+def position(clock) -> int:
+    beat, tick, frac, _rate = clock
+    return (beat * BEAT_TICKS + tick) * 256 + frac
+
+
+def hit_pitches(c: Combat) -> list[int]:
+    return [pitch for _frame, pitch, _clock in c.hits]
+
+
+def test_musical_hits_follow_the_string():
+    """Hit N of a string plays HITS pitch N, each on its step slot; an OFFBEAT step plays none but still
+    counts (the next hit plays the pitch after it)."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    s = first_free_slot(c)
+    c.play(["a", "a", "a", "a"], s, errors=[0, 7, -1, 2])
+    c.step(n=20)
+    c.check_judged()
+    assert c.stat("finished") == STRING["rush"]
+    assert hit_pitches(c) == [0, 2, 3]
+    for (_frame, _pitch, clock), slot in zip(c.hits, [s, s + 2, s + 3]):
+        assert position(clock) >= slot_start(slot), "a hit sounded before its step slot"
+    c.stop()
+
+
+def test_a_dodge_plays_no_hit():
+    """A then B within dodge_grace frames, and A+B together: dodges, with no musical hit, also when
+    the A was on the beat."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    s = first_free_slot(c)
+    c.tap(("a",), s, error=0)
+    c.step(("b",))  # B one frame after A: a dodge
+    c.step(n=30)
+    c.tap(("a",), s + 4, error=-1)
+    c.step()
+    c.step(("b",))  # two frames after: still a dodge
+    c.step(n=30)
+    c.tap(("a", "b"), s + 8, error=0)
+    c.step(n=30)
+    assert c.stat("dodges") == 3 and c.stat("steps") == 0
+    assert c.hits == [], f"dodges played musical hits {c.hits}"
+    c.stop()
+
+
+def test_a_press_on_a_taken_slot_plays_no_hit():
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    s = first_free_slot(c)
+    c.tap(("a",), s, error=-1)
+    c.step(n=3)
+    c.tap(("a",), s, error=3)  # judged against the same slot: ignored by the matcher
+    c.step(n=30)
+    assert c.stat("steps") == 1
+    assert hit_pitches(c) == [0]
+    c.stop()
+
+
+def test_a_press_that_breaks_a_string_plays_the_new_strings_first_pitch():
+    """A A, then B: B fits no candidate, so Rush breaks and B starts Crush at hit 0."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    c.play(["a", "a", "b"], first_free_slot(c))
+    c.step(n=30)
+    c.check_judged()
+    assert c.stat("breaks") == 1
+    assert hit_pitches(c) == [0, 1, 0]
+    c.stop()
+
+
+@pytest.mark.parametrize("quantize", [1, 0])
+def test_hit_latency(quantize):
+    """Frames from the press (the ISR reading it) to its musical hit, for an early, an on-time and a
+    late press. A hit waits dodge_grace frames (a dodge must not play one); quantized, an early press
+    also waits for its slot's start, and sounds on the first frame at or after it."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, "feedback_quantize_hits": quantize})
+    s = first_free_slot(c)
+    delays = {}
+    for k, (name, error) in enumerate([("early", -5), ("on time", 0), ("late", 4)]):
+        slot = s + 6 * k  # far enough apart that each press starts a new string
+        c.tap(("a",), slot, error=error)
+        c.step(n=20)
+        frame, pitch, clock = c.hits[k]
+        delays[name] = frame - c.judged_at[-1]
+        if quantize and name == "early":
+            assert 0 <= position(clock) - slot_start(slot) < clock[3], "not the first frame of the slot"
+        assert pitch == 0
+    c.check_judged()
+    print(f"press -> hit frames (quantize {quantize}): {delays}")
+    if quantize:
+        assert delays == {"early": 5, "on time": DODGE_GRACE, "late": DODGE_GRACE} or \
+            delays == {"early": 6, "on time": DODGE_GRACE, "late": DODGE_GRACE}, delays
+    else:
+        assert delays == {"early": DODGE_GRACE, "on time": DODGE_GRACE, "late": DODGE_GRACE}, delays
     c.stop()
 
 

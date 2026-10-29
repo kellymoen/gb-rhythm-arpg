@@ -10,7 +10,8 @@ typedef uint8_t scene_t;
 enum { SCENE_MENU, SCENE_COMBAT, SCENE_CALIBRATE, SCENE_RHYTHMTEST, SCENE_COUNT };
 
 /* Call first in every scene: stops the song, turns the LCD off (so VRAM loads are fast), hides
- * the window and every sprite, clears the background and drops queued presses. */
+ * the window and every sprite, clears the background, drops queued presses and any scheduled
+ * musical hit, and sets musical hits back to scheduled (gb/isr.h). */
 void scene_begin(void);
 
 /* Call once the scene has loaded its VRAM: turns the LCD back on. */

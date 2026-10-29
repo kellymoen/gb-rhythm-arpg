@@ -2,6 +2,7 @@
 
 #include "audio/music.h"
 #include "gb/input.h"
+#include "gb/isr.h"
 #include "gb/video.h"
 #include "scenes/scene.h"
 
@@ -18,6 +19,8 @@ void scene_begin(void)
     move_bkg(0, 0);
     video_set_brightness(0);
     input_flush();
+    isr_hits_on_press = 0;
+    isr_hit_cancel();
 }
 
 void scene_show(void)

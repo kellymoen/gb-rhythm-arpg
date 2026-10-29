@@ -66,9 +66,6 @@ void combat_on_event(const combo_event_t *e) BANKED
         /* the swing sounds at once; the hit sound waits for the hit frame */
         sfx_play(a->sfx != COMBO_NO_SFX ? combo_sfx[a->sfx]
                  : combat_pending_heavy ? SFX_SWING_HEAVY : SFX_SWING_LIGHT);
-        /* the next on-beat press of this string plays the next HITS pitch (sfx.h); a finished
-         * string starts over */
-        sfx_hit_step = e->type == COMBO_EV_FINISH ? 0 : e->step + 1;
         if (e->step == 0) {
             combat_stats.hits = 0;
             combat_ui_counters();
@@ -84,7 +81,6 @@ void combat_on_event(const combo_event_t *e) BANKED
         }
         break;
     case COMBO_EV_BREAK:
-        sfx_hit_step = 0;
         if (e->step) {
             combat_stats.breaks++;
             combat_ui_name(NAME_BREAK);
@@ -93,7 +89,6 @@ void combat_on_event(const combo_event_t *e) BANKED
         }
         break;
     case COMBO_EV_DODGE:
-        sfx_hit_step = 0;
         combat_pending = PENDING_DODGE;
         combat_stats.dodges++;
         if (combat_strike_grace) { /* a late dodge still beats a strike inside the GOOD window */

@@ -34,7 +34,8 @@ hud_metronome = 1    # [0..1] 1 = on (switches below too)
 hit_flash = 1        # [0..1]
 hit_flash_ticks = 6  # [0..24] how long a hit target flashes
 grade_popups = 1     # [0..1]
-musical_hits = 1     # [0..1] on-beat A/B presses play the song's hit instrument
+musical_hits = 1     # [0..1] combo steps that are not OFFBEAT play the song's hit instrument (pitch N for hit N)
+quantize_hits = 1    # [0..1] 1 = a musical hit sounds on its step slot's beat position (an early press waits for it); 0 = as soon as the step is known
 musical_hit_frames = 10   # [1..30] how long a musical hit holds P2 (frames: a sound length, not combat timing)
 musical_hit_volume = 15   # [1..15] musical hit volume
 popup_ticks = 36     # [8..96] how long a grade popup (and the dummy's strike mark) shows, in song ticks

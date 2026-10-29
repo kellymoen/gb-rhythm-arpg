@@ -24,6 +24,11 @@
  *   fits several, the one that needs the fewest grace slots wins (so the rest in `A A . A` beats
  *   the slack `A A _ A` of `A A A A`), then the one whose step names the held direction (fB beats B).
  *
+ * - A held-back press can land provisionally before it commits (combo_land): its events are kept
+ *   and reported when it commits (after dodge_grace, as before), but combo_hit() names the step it
+ *   became straight away, so the scene can schedule its musical hit without waiting. A dodge undoes
+ *   the landing.
+ *
  * Driving it from the main loop, every frame:
  *     frame = input_frame;                   read BEFORE draining the queue (dodge_grace timing)
  *     while (input_pop(&p)) combo_press(...)  one combo_input_t per press
@@ -65,20 +70,46 @@ typedef struct {
     grade_t grade;         /* the press's grade (DODGE: the earlier press's); OFFBEAT for BREAK */
 } combo_event_t;
 
-/* Private: read only through events. */
+/* Where the matcher is in a string. */
 typedef struct {
-    const combo_string_t *strings;
-    uint8_t count;
-    uint8_t all;           /* bitmask of every string */
     uint8_t string;        /* lowest candidate string, or COMBO_IDLE */
     uint8_t cands;         /* bitmask of strings the steps so far still fit */
     uint8_t pos;           /* step index (rests included) of the last landed step */
     uint8_t step;          /* hits landed so far */
     uint16_t last_slot;    /* step slot of the last landed step */
     uint16_t deadline;     /* last slot a press can still continue some candidate */
-    uint8_t pending;       /* a lone A/B held back for dodge_grace frames */
+} combo_run_t;
+
+/* What a press means for musical hits (combo_hit()). */
+typedef struct {
+    combo_event_t ev;      /* type, step (the HITS pitch) and grade, see combo_hit() */
+    uint16_t slot;         /* the press's step slot, frame and buttons */
+    uint8_t frame;
+    uint8_t buttons;
+} combo_hit_t;
+
+/* Private: read only through events and combo_hit(). */
+typedef struct {
+    const combo_string_t *strings;
+    uint8_t count;
+    uint8_t all;           /* bitmask of every string */
+    combo_run_t run;
+    uint8_t pending;       /* a lone A/B held back for dodge_grace frames (and landed provisionally) */
     combo_input_t held;
+    combo_run_t undo;      /* the run before the held press landed (a dodge restores it) */
+    uint8_t held_n;        /* its events, reported when it commits */
+    combo_event_t held_ev[COMBO_MAX_EVENTS];
+    combo_hit_t hit;
 } combo_t;
+
+/* What the last combo_press, combo_land or combo_tick decided for musical hits, at once (a press
+ * held back for dodge_grace is decided when it lands; its events still come when it commits):
+ *   ev.type COMBO_EV_STEP / _FINISH  a press became that step: ev.step is its HITS pitch, ev.grade
+ *                                    its grade; schedule its hit (slot, frame, buttons: the press).
+ *   ev.type COMBO_EV_DODGE           a dodge undid a held-back press that had become a step: cancel
+ *                                    that step's hit if it has not played.
+ *   ev.type COMBO_EV_NONE            nothing for musical hits. */
+#define combo_hit(c) ((const combo_hit_t *)&(c)->hit)
 
 #ifdef __SDCC
 #define COMBO_BANKED __banked /* the matcher lives in a switchable bank; its tables are in bank 0/RAM */
@@ -95,6 +126,11 @@ void combo_reset_with(combo_t *c, const combo_string_t *strings, uint8_t count) 
 /* Feed one press. Returns the number of events written to `out` (0..2: a held-back press can
  * resolve as BREAK + STEP, a dodge can end a string: BREAK + DODGE). */
 uint8_t combo_press(combo_t *c, const combo_input_t *in, combo_event_t out[COMBO_MAX_EVENTS]) COMBO_BANKED;
+
+/* Land a press held back for dodge_grace now, provisionally, if it has not landed yet: combo_hit()
+ * then names the step it became. Costs what a landing costs (combo_tick pays it when it commits
+ * otherwise), so the scene calls it when the frame has room, as early as it can. */
+void combo_land(combo_t *c) COMBO_BANKED;
 
 /* Call once per main-loop frame after the presses, with the beat clock (music_now) and the frame
  * counter read before draining the press queue: resolves held-back presses after dodge_grace and
