@@ -95,8 +95,25 @@ def test_a_failing_aseprite_is_reported(tmp_path, source):
     exe = tmp_path / "aseprite"
     exe.write_text(f"#!{sys.executable}\nimport sys\nprint('boom', file=sys.stderr)\nsys.exit(3)\n")
     exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
-    with pytest.raises(ConvertError, match=r"Aseprite export failed \(exit 3\): boom"):
+    with pytest.raises(ConvertError, match=r"Aseprite export failed \(exit 3\): boom; open the file in Aseprite, "
+                                           r"fix what it reports and save it, then run make again"):
         export.export(source, tmp_path / "exports", str(exe))
+
+
+def test_aseprite_that_cannot_start_says_to_set_ASEPRITE(tmp_path, source):
+    exe = tmp_path / "aseprite"
+    exe.write_text("#!/nonexistent/interpreter\n")
+    exe.chmod(exe.stat().st_mode | stat.S_IXUSR)
+    with pytest.raises(ConvertError, match=r"hero_genplaceholder\.aseprite: could not run Aseprite \(.*\): .*; point "
+                                           r"ASEPRITE at the Aseprite executable"):
+        export.export(source, tmp_path / "exports", str(exe))
+
+
+def test_missing_source_names_it_and_the_fix(tmp_path):
+    missing = tmp_path / "assets" / "ghost.aseprite"
+    with pytest.raises(ConvertError, match=r"ghost\.aseprite: does not exist; check the path, or run `make "
+                                           r"placeholders` to recreate a missing placeholder"):
+        export.export(missing, tmp_path / "exports", None)
 
 
 def test_main_reports_stale_on_stderr_and_exits_1(tmp_path, source, capsys):

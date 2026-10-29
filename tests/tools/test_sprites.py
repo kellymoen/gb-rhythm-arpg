@@ -392,6 +392,87 @@ def test_reverse_tags_are_rejected(tmp_path):
         convert(sh, tmp_path)
 
 
+def test_tag_defined_twice_says_which_to_remove(tmp_path):
+    sh = simple(tmp_path)
+    sh.tag("idle_s", 1, 1)
+    with pytest.raises(ConvertError, match=r"hero_genplaceholder\.aseprite: tag idle_s is defined twice; delete or "
+                                           r"rename one of the two idle_s tags"):
+        convert(sh, tmp_path)
+
+
+def test_export_without_frames_names_the_export_and_the_fix(tmp_path):
+    sh = simple(tmp_path)
+    png, js = sh.write(tmp_path)
+    doc = json.loads(js.read_text())
+    doc["frames"] = []
+    js.write_text(json.dumps(doc))
+    with pytest.raises(ConvertError, match=r"hero_genplaceholder\.aseprite: the export hero_genplaceholder\.json has "
+                                           r"no frames; draw at least one frame in Aseprite, then run make with "
+                                           r"Aseprite installed"):
+        sprites.convert(png, js, BUDGETS, 48)
+
+
+def test_box_too_far_from_the_pivot_says_how_far_and_what_to_move(tmp_path):
+    sh = simple(tmp_path)
+    sh.slices = [PIVOT_SLICE, {"name": "hurtbox", "keys": [{"frame": 0, "bounds": {"x": -200, "y": 5, "w": 8, "h": 9}}]}]
+    with pytest.raises(ConvertError, match=r"tag idle_s frame 1: hurtbox at \(-200,5\) 8x9 is too far from the pivot "
+                                           r"\(12,30\): its top-left corner is -212,-25 px away and must be within "
+                                           r"-128\.\.127; move the `hurtbox` slice \(or the pivot\) closer"):
+        convert(sh, tmp_path)
+
+
+def test_box_too_big_says_to_resize_the_slice(tmp_path):
+    sh = simple(tmp_path)
+    sh.slices = [PIVOT_SLICE, {"name": "hurtbox", "keys": [{"frame": 0, "bounds": {"x": 0, "y": 0, "w": 300, "h": 9}}]}]
+    with pytest.raises(ConvertError, match=r"tag idle_s frame 1: hurtbox at \(0,0\) is 300x9; a box is 1-255 px each "
+                                           r"way, so resize the `hurtbox` slice"):
+        convert(sh, tmp_path)
+
+
+def test_pivot_too_far_from_the_art_says_to_move_the_pivot(tmp_path):
+    sh = simple(tmp_path)
+    sh.slices = [{"name": "pivot", "keys": [{"frame": 0, "bounds": {"x": 200, "y": 30, "w": 1, "h": 1}}]},
+                 {"name": "hurtbox", "keys": [{"frame": 0, "bounds": {"x": 190, "y": 5, "w": 8, "h": 9}}]}]
+    with pytest.raises(ConvertError, match=r"tag idle_s frame 1: pivot \(200,30\) is too far from the art \(the 8x16 "
+                                           r"part at \(0,16\) is -200,-14 px away; at most 127 each way\); move the "
+                                           r"`pivot` slice to the character's feet"):
+        convert(sh, tmp_path)
+
+
+def test_bad_sprite_name_suggests_a_file_name(tmp_path):
+    png, js = simple(tmp_path).write(tmp_path)
+    with pytest.raises(ConvertError, match=r"sprite name `Big-Hero` must be lowercase letters, digits and "
+                                           r"underscores; rename the file, e.g. big_hero\.aseprite"):
+        sprites.convert(png, js, BUDGETS, 48, name="Big-Hero")
+
+
+def test_unknown_user_data_and_odd_tag_names_say_what_to_change(tmp_path):
+    sh = simple(tmp_path)
+    sh.tags[0]["data"] = "dur=1/8 fast"
+    with pytest.raises(ConvertError, match=r"tag idle_s: unknown user data `fast`; remove it from the tag's user data"):
+        convert(sh, tmp_path)
+    sh = simple(tmp_path)
+    sh.tags[0]["name"] = "Idle_s"
+    with pytest.raises(ConvertError, match=r"facing one of s se e ne n; rename the tag, e.g. idle_s"):
+        convert(sh, tmp_path)
+
+
+def test_overlong_dur_says_to_shorten_it(tmp_path):
+    sh = simple(tmp_path)
+    sh.tags[0]["data"] = "dur=400"
+    with pytest.raises(ConvertError, match=r"tag idle_s: dur=400/1 is 76800 ticks; the maximum is 65535, so shorten dur"):
+        convert(sh, tmp_path)
+
+
+def test_main_explains_a_json_that_is_not_an_aseprite_export(tmp_path, capsys):
+    png, js = simple(tmp_path).write(tmp_path)
+    js.write_text("{}")
+    assert sprites.main([str(png), str(js), str(tmp_path / "gen")]) == 1
+    err = capsys.readouterr().err
+    assert f"{js}: missing 'frames': not an Aseprite --format json-array export" in err
+    assert "run make with Aseprite installed and commit exports/" in err
+
+
 # --- C output ------------------------------------------------------------------------------------
 
 

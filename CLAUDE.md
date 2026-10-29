@@ -40,8 +40,11 @@ emulation, SameBoy as reference — ADR 0008). Architecture decisions live in `d
 - **Never create, edit or delete a file under `assets/` that lacks the `_genplaceholder` suffix** — it is
   the author's work (ADR 0007). A change that would force the author to re-author an asset needs their OK.
 - Anything the feel lab tunes lives in a RAM table in DEBUG builds and has a lab descriptor (ADR 0008).
-- Bank 0 is 16 KB and shared by all unbanked code: put new data and non-hot code in banked files
-  (`#pragma bank 255`, `BANKED`). ISR and per-frame hot paths stay in bank 0.
+- Bank 0 (16 KB) holds only the VBlank/LCD ISRs and everything they call, and code that switches
+  ROM banks to copy banked data (e.g. `vram_stream`'s copies, `NONBANKED`). Everything else is banked
+  (`#pragma bank 255`, `BANKED`; `CORE_BANKED` from `core/banked.h` in `src/core`), per-frame code
+  included: the banked-call overhead is measured as small (`docs/perf.md`). Move code to bank 0 only
+  when a measurement there says it must.
 - Per-frame and ISR code: no 32-bit math and no 16-bit multiply/divide/modulo (SDCC helpers cost
   hundreds to thousands of cycles). Step values incrementally or use subtraction loops. See `docs/perf.md`.
 - Update sprites/palettes first after `vsync()`; BG text is slow with the LCD on, so spread it across

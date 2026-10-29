@@ -129,6 +129,22 @@ def test_render_header_declares_enums_tables_and_ram_copy(tmp_path):
     assert "{ 0x01, 0x01, 0x03, 0x01, 0x00, 0x00, 0x00, 0x00 }" in source
 
 
+def test_string_labels_default_to_the_name_and_may_be_set(tmp_path):
+    text = ATTACKS + string('["A"]', '["jab1"]', name="crush_lunge") + string('["B"]', '["jab1"]', name="x",
+                                                                              extra='label = "DASH-IN!"\n')
+    c = parse(tmp_path, text)
+    assert [s.label for s in c.strings] == ["CRUSH LUNGE", "DASH-IN!"]
+    header, _, _ = combos.render(c, "data/combos.toml")
+    assert '#define COMBO_STRING_LIST(X) X(CRUSH_LUNGE, "CRUSH LUNGE") X(X, "DASH-IN!")\n' in header
+    assert '#define COMBO_STRING_LABELS { "CRUSH LUNGE", "DASH-IN!" }\n' in header
+    assert "#define COMBO_LABEL_MAX 12\n" in header
+
+
+def test_repo_combo_labels_are_what_the_combat_ui_showed():
+    header, _, _ = combos.render(combos.parse(REPO / "data" / "combos.toml"), "data/combos.toml")
+    assert '#define COMBO_STRING_LABELS { "RUSH", "PAUSE", "CRUSH", "CRUSH LUNGE" }' in header
+
+
 def test_lab_descriptor_offsets_match_the_struct_layout(tmp_path):
     _, _, lab_text = combos.render(parse(tmp_path, ATTACKS + STRINGS), "data/combos.toml")
     lab = json.loads(lab_text)
@@ -187,12 +203,13 @@ def string(steps: str, attacks: str, name: str = "rush", extra: str = "") -> str
 
 ERRORS = [
     ("[[attack]\n", "invalid TOML"),
+    ("[[attack]\n", "; fix the syntax at that line"),
     ("speed = 3\n" + ATTACKS + STRINGS, "unknown top-level key 'speed'; use [[attack]] and [[string]] tables"),
-    ('attack = 3\n' + STRINGS, "'attack' must be an array of [[attack]] tables"),
+    ('attack = 3\n' + STRINGS, "'attack' must be an array of [[attack]] tables; write each attack as a [[attack]] table"),
     (STRINGS, "no [[attack]] tables; add at least one"),
     (ATTACKS, "no [[string]] tables; add at least one"),
     ('[[attack]]\nanim = "light1"\ndamage = 1\n' + STRINGS, "attack 1 has no name; add name = "),
-    ('[[attack]]\nname = "Jab"\nanim = "light1"\ndamage = 1\n', "attack name 'Jab' must be lower_snake_case"),
+    ('[[attack]]\nname = "Jab"\nanim = "light1"\ndamage = 1\n', "attack name 'Jab' must be lower_snake_case; rename it, e.g. 'jab'"),
     ('[[attack]]\nname = "count"\nanim = "light1"\ndamage = 1\n', "attack name 'count' is reserved"),
     (ATTACKS + '[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = 1\n', "attack 'jab1' is defined twice"),
     ('[[attack]]\nname = "jab1"\ndamage = 1\n', "attack 'jab1': missing anim; add anim = "),
@@ -200,23 +217,35 @@ ERRORS = [
     ('[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = 1\ndmg = 2\n',
      "attack 'jab1': unknown key 'dmg'; allowed: name, anim, damage, lunge, sfx"),
     ('[[attack]]\nname = "jab1"\nanim = "Light 1"\ndamage = 1\n',
-     "attack 'jab1': anim 'Light 1' must be lower_snake_case"),
+     "attack 'jab1': anim 'Light 1' must be lower_snake_case (the action of an Aseprite tag); use the tag's "
+     "action, e.g. 'light_1'"),
     ('[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = 100\n',
-     r"attack 'jab1': damage = 100 is out of range [0..99]"),
-    ('[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = true\n', "attack 'jab1': damage must be an integer"),
+     r"attack 'jab1': damage = 100 is out of range [0..99]; use a value from 0 to 99"),
+    ('[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = true\n', "attack 'jab1': damage must be an integer in [0..99]; write it without quotes, e.g. damage = 0"),
     ('[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = 1\nlunge = -1\n',
      r"attack 'jab1': lunge = -1 is out of range [0..48]"),
     ('[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = 1\nsfx = 3\n',
      "attack 'jab1': sfx must be a sound effect name"),
     ('[[attack]]\nname = "jab1"\nanim = "light1"\ndamage = 1\nsfx = "Big Swing"\n',
-     "attack 'jab1': sfx 'Big Swing' must be lower_snake_case"),
+     "attack 'jab1': sfx 'Big Swing' must be lower_snake_case (assets/sfx/<sfx>.toml); use the effect's file "
+     "name, e.g. 'big_swing'"),
     (ATTACKS + '[[string]]\nname = "rush"\nattacks = ["jab1"]\n', "string 'rush': missing steps; add steps = "),
     (ATTACKS + '[[string]]\nname = "rush"\nsteps = ["A"]\n', "string 'rush': missing attacks; add attacks = "),
     (ATTACKS + string('["A"]', '["jab1"]', extra="combo = 1\n"),
-     "string 'rush': unknown key 'combo'; allowed: name, steps, attacks, unlock"),
+     "string 'rush': unknown key 'combo'; allowed: name, label, steps, attacks, unlock"),
+    (ATTACKS + string('["A"]', '["jab1"]', name="very_long_name"),
+     "string 'very_long_name': its on-screen name 'VERY LONG NAME' (the name upper-cased) is 14 characters; at "
+     "most 12 fit; add a shorter label, e.g. label = \"VERY LONG NA\""),
+    (ATTACKS + string('["A"]', '["jab1"]', extra='label = "Rush"\n'),
+     "string 'rush': label 'Rush' uses 'h', 's', 'u', which the font has no glyph for; use only A-Z, 0-9, space "
+     "and +-.:/!?%><; change it, or remove label to show 'RUSH'"),
+    (ATTACKS + string('["A"]', '["jab1"]', extra='label = "RUSH RUSH RUSH"\n'),
+     "string 'rush': label 'RUSH RUSH RUSH' is 14 characters; at most 12 fit; change it, or remove label"),
+    (ATTACKS + string('["A"]', '["jab1"]', extra='label = 3\n'),
+     "string 'rush': label 3 must be a non-empty string; change it, or remove label to show 'RUSH'"),
     (ATTACKS + string('"A A A"', '["jab1"]'), "string 'rush': steps must be an array of step strings"),
     (ATTACKS + string('["A"]', '"jab1"'), "string 'rush': attacks must be an array of attack names"),
-    (ATTACKS + string('["A"]', '["jab1"]', name="Rush"), "string name 'Rush' must be lower_snake_case"),
+    (ATTACKS + string('["A"]', '["jab1"]', name="Rush"), "string name 'Rush' must be lower_snake_case; rename it, e.g. 'rush'"),
     (ATTACKS + string('["A"]', '["jab1"]') + string('["B"]', '["jab1"]'), "string 'rush' is defined twice"),
     (ATTACKS + string('["A"]', '["jab1"]', extra="unlock = 256\n"),
      r"string 'rush': unlock = 256 is out of range [0..255]"),

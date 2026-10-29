@@ -5,25 +5,28 @@
 Every string is stored as COMBO_MAX_STEPS fixed-size step and attack slots so the feel lab can edit a
 pattern in place. Step byte: bits 0-1 button (1 = A, 2 = B, 3 = rest, 0 = end), bits 2-3 held direction
 (0 = any, 1 = forward, 2 = back, 3 = side; matches COMBO_DIR_* in src/core/combo.h). The matcher is
-src/core/combo.c; the schema is documented at the top of data/combos.toml.
+src/core/combo.c; the schema is documented at the top of data/combos.toml. A [[string]] may also set
+`label`, its on-screen name (default: the name upper-cased, `_` as a space; at most LABEL_MAX columns of
+the BG font), emitted as COMBO_STRING_LIST / COMBO_STRING_LABELS in combos.h for the combat UI.
 
 DEBUG builds (and host tests) keep a RAM copy `combos` that `combos_reset()` fills from the ROM
 defaults; release builds read the ROM table directly and `combos_reset()` is a no-op macro.
 """
 
 import json
-import re
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from gbtools import labdesc
 from gbtools.errors import ConvertError
+from gbtools.names import IDENT, display_name, label_problem, suggest_ident
 
 MAX_STEPS = 8
 MAX_STRINGS = 8  # src/core/combo.c tracks candidate strings in one byte
 NONE = 0xFF
-IDENT = re.compile(r"^[a-z][a-z0-9_]*$")
+LABEL_MAX = 12  # columns the combat UI gives a string's on-screen name
 RESERVED = {"count"}
 
 END, REST = 0x00, 0x03
@@ -34,7 +37,7 @@ TOKENS = {"-": END, ".": REST} | {
 }
 
 ATTACK_KEYS = ["name", "anim", "damage", "lunge", "sfx"]
-STRING_KEYS = ["name", "steps", "attacks", "unlock"]
+STRING_KEYS = ["name", "label", "steps", "attacks", "unlock"]
 DAMAGE = (0, 99)
 LUNGE = (0, 48)
 UNLOCK = (0, 255)
@@ -61,6 +64,7 @@ class String:
     attacks: list[int]  # MAX_STEPS attack indices, NONE under rests and ends
     tokens: list[str]  # the TOML step tokens, as written
     attack_names: list[str]  # the TOML attack names, as written
+    label: str = ""  # on-screen name: `label`, or the name upper-cased with spaces for underscores
 
 
 @dataclass
@@ -74,7 +78,8 @@ class Combos:
 def _tables(path: Path, doc: dict, key: str) -> list[dict]:
     value = doc.get(key, [])
     if not isinstance(value, list) or not all(isinstance(t, dict) for t in value):
-        raise ConvertError(path, f"'{key}' must be an array of [[{key}]] tables")
+        raise ConvertError(path, f"'{key}' must be an array of [[{key}]] tables; write each {key} as a "
+                                 f"[[{key}]] table (see the top of data/combos.toml)")
     if not value:
         raise ConvertError(path, f"no [[{key}]] tables; add at least one")
     return value
@@ -85,7 +90,8 @@ def _name(path: Path, kind: str, index: int, table: dict, seen: set[str]) -> str
     if name is None:
         raise ConvertError(path, f'{kind} {index + 1} has no name; add name = "<lower_snake_case>"')
     if not isinstance(name, str) or not IDENT.match(name):
-        raise ConvertError(path, f"{kind} name '{name}' must be lower_snake_case")
+        raise ConvertError(path, f"{kind} name '{name}' must be lower_snake_case; rename it, e.g. "
+                                 f"'{suggest_ident(name)}'")
     if name in RESERVED:
         raise ConvertError(path, f"{kind} name '{name}' is reserved; pick another")
     if name in seen:
@@ -107,9 +113,11 @@ def _int(path: Path, where: str, table: dict, key: str, bounds: tuple[int, int],
         return default
     value = table[key]
     if isinstance(value, bool) or not isinstance(value, int):
-        raise ConvertError(path, f"{where}: {key} must be an integer in [{bounds[0]}..{bounds[1]}]")
+        raise ConvertError(path, f"{where}: {key} must be an integer in [{bounds[0]}..{bounds[1]}]; write it "
+                                 f"without quotes, e.g. {key} = {bounds[0]}")
     if not bounds[0] <= value <= bounds[1]:
-        raise ConvertError(path, f"{where}: {key} = {value} is out of range [{bounds[0]}..{bounds[1]}]")
+        raise ConvertError(path, f"{where}: {key} = {value} is out of range [{bounds[0]}..{bounds[1]}]; use a "
+                                 f"value from {bounds[0]} to {bounds[1]}")
     return value
 
 
@@ -130,14 +138,16 @@ def _parse_attacks(path: Path, tables: list[dict], anims: list[str], sfx: list[s
             raise ConvertError(path, f'{where}: missing anim; add anim = "<player animation, e.g. light1>"')
         if not isinstance(anim, str) or not IDENT.match(anim):
             raise ConvertError(
-                path, f"{where}: anim '{anim}' must be lower_snake_case (the action of an Aseprite tag)")
+                path, f"{where}: anim '{anim}' must be lower_snake_case (the action of an Aseprite tag); "
+                      f"use the tag's action, e.g. '{suggest_ident(anim)}'")
         damage = _int(path, where, t, "damage", DAMAGE)
         lunge = _int(path, where, t, "lunge", LUNGE, default=0)
         effect = t.get("sfx", "")
         if not isinstance(effect, str):
             raise ConvertError(path, f'{where}: sfx must be a sound effect name like "swing", or "" for none')
         if effect and not IDENT.match(effect):
-            raise ConvertError(path, f"{where}: sfx '{effect}' must be lower_snake_case (assets/sfx/<sfx>.toml)")
+            raise ConvertError(path, f"{where}: sfx '{effect}' must be lower_snake_case (assets/sfx/<sfx>.toml); "
+                                     f"use the effect's file name, e.g. '{suggest_ident(effect)}'")
         attacks.append(Attack(
             name, _index(anims, anim), damage, lunge, _index(sfx, effect) if effect else NONE, "sfx" in t))
     return attacks
@@ -157,6 +167,7 @@ def _parse_string(path: Path, i: int, t: dict, seen: set[str], attack_names: lis
         raise ConvertError(
             path, f'{where}: attacks must be an array of attack names, e.g. ["jab1", "jab2", "", "wide"]')
     unlock = _int(path, where, t, "unlock", UNLOCK, default=0)
+    label = _label(path, where, t, name)
     if len(tokens) > MAX_STEPS:
         raise ConvertError(path, f"{where}: {len(tokens)} steps, at most {MAX_STEPS} fit; shorten it")
     if len(names) > len(tokens):
@@ -198,7 +209,23 @@ def _parse_string(path: Path, i: int, t: dict, seen: set[str], attack_names: lis
         raise ConvertError(
             path, f"{where} step {len(used)}: a string can't end with a rest; remove the trailing '.' "
             "(string_grace already lets the player pause)")
-    return String(name, unlock, steps, attacks, list(tokens), list(names))
+    return String(name, unlock, steps, attacks, list(tokens), list(names), label)
+
+
+def _label(path: Path, where: str, t: dict, name: str) -> str:
+    """The string's on-screen name, printed with the BG font (src/gb/text.h)."""
+    default = display_name(name)
+    if "label" not in t:
+        if problem := label_problem(default, LABEL_MAX):
+            raise ConvertError(path, f"{where}: its on-screen name '{default}' (the name upper-cased) {problem}; "
+                                     f'add a shorter label, e.g. label = "{default[:LABEL_MAX].rstrip()}"')
+        return default
+    label = t["label"]
+    if problem := label_problem(label, LABEL_MAX):
+        shown = f"'{label}'" if isinstance(label, str) else repr(label)
+        fix = "change it" if label_problem(default, LABEL_MAX) else f"change it, or remove label to show '{default}'"
+        raise ConvertError(path, f"{where}: label {shown} {problem}; {fix}")
+    return label
 
 
 def _length(s: String) -> int:
@@ -232,7 +259,7 @@ def parse(path: Path) -> Combos:
     try:
         doc = tomllib.loads(path.read_text())
     except tomllib.TOMLDecodeError as e:
-        raise ConvertError(path, f"invalid TOML: {e}") from e
+        raise ConvertError(path, f"invalid TOML: {e}; fix the syntax at that line") from e
     for key in doc:
         if key not in ("attack", "string"):
             raise ConvertError(path, f"unknown top-level key '{key}'; use [[attack]] and [[string]] tables")
@@ -268,6 +295,8 @@ def render(c: Combos, source: str) -> tuple[str, str, str]:
     banner = f"/* Generated from {source} by tools/gbtools/combos.py. Do not edit. */\n"
     attack_names = [a.name for a in c.attacks]
     anim_list = " ".join(f"X({n.upper()})" for n in c.anims)
+    string_list = " ".join(f'X({s.name.upper()}, "{s.label}")' for s in c.strings)
+    string_labels = ", ".join(f'"{s.label}"' for s in c.strings)
     sfx_list = " ".join(f"X({n.upper()})" for n in c.sfx)
     header = (
         banner
@@ -286,6 +315,12 @@ def render(c: Combos, source: str) -> tuple[str, str, str]:
         + _enum("COMBO_ATTACK", attack_names) + "\n"
         + _enum("COMBO_ANIM", c.anims) + "\n"
         + _enum("COMBO_SFX", c.sfx) + "\n"
+        + "/* On-screen string names (data/combos.toml `label`, else the name upper-cased), at most\n"
+        + " * COMBO_LABEL_MAX columns of the BG font: X(NAME, \"LABEL\") in COMBO_STRING_* order. For a table:\n"
+        + " * static const char *const names[COMBO_STRING_COUNT] = COMBO_STRING_LABELS; */\n"
+        + f"#define COMBO_LABEL_MAX {LABEL_MAX}\n"
+        + f"#define COMBO_STRING_LIST(X) {string_list}\n"
+        + f"#define COMBO_STRING_LABELS {{ {string_labels} }}\n\n"
         + f"#define COMBO_ANIM_LIST(X) {anim_list}\n"
         + f"#define COMBO_SFX_LIST(X) {sfx_list}\n\n"
         + "typedef struct {\n"
@@ -345,39 +380,32 @@ def _lab(c: Combos, source: str) -> dict:
     for i, s in enumerate(c.strings):
         base = i * STRING_SIZE
         for k in range(MAX_STEPS):
-            field = {"path": ["string", i, "steps", k], "offset": base + k, "type": "enum",
-                     "values": step_values, "default": s.tokens[k] if k < len(s.tokens) else "-",
-                     "doc": f"{s.name} step {k + 1}: A/B (f/b/s = held direction), '.' rest, '-' end"}
-            if k >= len(s.tokens):
-                field["absent"] = True
-            fields.append(field)
+            fields.append(labdesc.field(
+                ["string", i, "steps", k], base + k, "enum", s.tokens[k] if k < len(s.tokens) else "-",
+                f"{s.name} step {k + 1}: A/B (f/b/s = held direction), '.' rest, '-' end",
+                values=step_values, absent=k >= len(s.tokens)))
         for k in range(MAX_STEPS):
-            field = {"path": ["string", i, "attacks", k], "offset": base + MAX_STEPS + k, "type": "enum",
-                     "values": attack_values, "default": s.attack_names[k] if k < len(s.attack_names) else "",
-                     "doc": f"{s.name} step {k + 1}: attack ('' under rests)"}
-            if k >= len(s.attack_names):
-                field["absent"] = True
-            fields.append(field)
-        fields.append({"path": ["string", i, "unlock"], "offset": base + 2 * MAX_STEPS, "type": "u8",
-                       "default": s.unlock, "min": UNLOCK[0], "max": UNLOCK[1],
-                       "doc": f"{s.name}: progression level that unlocks it (not enforced yet)"})
+            fields.append(labdesc.field(
+                ["string", i, "attacks", k], base + MAX_STEPS + k, "enum",
+                s.attack_names[k] if k < len(s.attack_names) else "", f"{s.name} step {k + 1}: attack ('' under rests)",
+                values=attack_values, absent=k >= len(s.attack_names)))
+        fields.append(labdesc.field(
+            ["string", i, "unlock"], base + 2 * MAX_STEPS, "u8", s.unlock,
+            f"{s.name}: progression level that unlocks it (not enforced yet)", min=UNLOCK[0], max=UNLOCK[1]))
     base = len(c.strings) * STRING_SIZE
     for j, a in enumerate(c.attacks):
         at = base + j * ATTACK_SIZE
         fields += [
-            {"path": ["attack", j, "anim"], "offset": at, "type": "enum",
-             "values": {n: i for i, n in enumerate(c.anims)}, "default": c.anims[a.anim],
-             "doc": f"{a.name}: player animation"},
-            {"path": ["attack", j, "damage"], "offset": at + 1, "type": "u8", "default": a.damage,
-             "min": DAMAGE[0], "max": DAMAGE[1], "doc": f"{a.name}: damage (OFFBEAT >> offbeat_damage_shift)"},
-            {"path": ["attack", j, "lunge"], "offset": at + 2, "type": "u8", "default": a.lunge,
-             "min": LUNGE[0], "max": LUNGE[1], "doc": f"{a.name}: soft-lock lunge, px"},
-            {"path": ["attack", j, "sfx"], "offset": at + 3, "type": "enum",
-             "values": {"": NONE} | {n: i for i, n in enumerate(c.sfx)},
-             "default": c.sfx[a.sfx] if a.sfx != NONE else "", "doc": f"{a.name}: sound effect"},
+            labdesc.field(["attack", j, "anim"], at, "enum", c.anims[a.anim], f"{a.name}: player animation",
+                          values={n: i for i, n in enumerate(c.anims)}),
+            labdesc.field(["attack", j, "damage"], at + 1, "u8", a.damage,
+                          f"{a.name}: damage (OFFBEAT >> offbeat_damage_shift)", min=DAMAGE[0], max=DAMAGE[1]),
+            labdesc.field(["attack", j, "lunge"], at + 2, "u8", a.lunge, f"{a.name}: soft-lock lunge, px",
+                          min=LUNGE[0], max=LUNGE[1]),
+            labdesc.field(["attack", j, "sfx"], at + 3, "enum", c.sfx[a.sfx] if a.sfx != NONE else "",
+                          f"{a.name}: sound effect", values={"": NONE} | {n: i for i, n in enumerate(c.sfx)},
+                          absent=not a.sfx_given),
         ]
-        if not a.sfx_given:
-            fields[-1]["absent"] = True
     return {"source": source, "symbol": "_combos", "fields": fields}
 
 
