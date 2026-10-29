@@ -13,8 +13,11 @@
 #define BUDGET_ENEMY_H 32           /* px */
 #define BUDGET_ENEMIES 4            /* on screen at once */
 #define BUDGET_OBJS_PER_LINE 10     /* hardware limit per scanline */
-#define BUDGET_FRAME_TILES 12       /* 8x8 tiles in one streamed animation frame */
-#define BUDGET_STREAM_BYTES 192     /* tile bytes copied to VRAM per frame (one frame's tiles); tentative until measured */
+#define BUDGET_FRAME_TILES 12       /* 8x8 tiles in one animation frame (one VRAM slot) */
+#define BUDGET_STREAM_BYTES 192     /* bytes in one frame's slot. Streaming is time-bounded, not per-frame:
+                                     * ~80 B per VBlank plus main-loop slack, so a 12-tile frame shows 1-2
+                                     * video frames after it is due (docs/perf.md) */
+#define BUDGET_ANIM_FRAMES 16       /* frames per tag (anim_t holds 16 ends) */
 
 /* Background */
 #define BUDGET_BG_TILES 180         /* unique 8x8 tiles per arena (ADR 0001: 150-190) */

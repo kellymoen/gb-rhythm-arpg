@@ -91,7 +91,7 @@ $(ROM): $(OBJS)
 	$(LCC) $(LDFLAGS) -o $@ $^
 
 # Every object may include generated headers, so generate them first.
-$(OBJ)/%.o: %.c $(GEN_HDR)
+$(OBJ)/%.o: %.c $(GEN_HDR) $(wildcard src/*/*.h)
 	@mkdir -p $(dir $@)
 	$(LCC) $(CFLAGS) -c -o $@ $<
 

@@ -65,6 +65,29 @@ Measured with TIMA in a scratch ROM, interrupts off, banked call included.
 
 If the combat frame gets tight, the next lever is `probe()` in assembly.
 
+## M2 sprite runtime (2026-10-29)
+
+Measured at DMG speed in the combat-scene sprite viewer under random button spam.
+
+| Work | Scanlines (avg / max) |
+|------|-----------|
+| Character update, no event | 1–2 |
+| Update that shows a new frame | 24 / 31 |
+| `spriteanim_play` | 25 / 29 |
+| `spriteanim_face` to another drawn facing | 22 / 26 (a mirror-only turn is nearly free) |
+| `oam_begin` + 2 draws + `oam_end` | 13 / 16 |
+| Tile streaming, HBlank copy with the LCD on | ~37 per 192 B (~5 B per line) |
+| Tile streaming, LYC=143 interrupt into VBlank | ~80 B per VBlank |
+| GBDK `set_sprite_data` with the LCD on | ~64 per 192 B |
+
+A 12-tile frame therefore shows 1–2 video frames after it is due, and frames already sitting in a
+slot cost nothing. Rule for scenes: at most one costly anim start, turn or new frame shown per
+frame; skip costly work when the loop starts late (LY ≥ 36); stop streaming at LY 124. The
+combat-scene viewer's main loop ends at LY 80 (median), 139 at worst.
+
+The song-loop spike (106–112 lines in the ISR, measured before the converter fix above) no longer
+drops frames: the rhythm-test and combat scenes ran 1400 frames past the loop point with no misses.
+
 ## Lessons
 
 - The first `hud_update` called `beat_ticks_until_slot` (16-bit multiply/divide) for each of 8 pips

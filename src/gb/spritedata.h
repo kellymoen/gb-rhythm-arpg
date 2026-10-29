@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 /* Character sprite data layout shared by tools/gbtools/sprites.py and the sprite runtime
- * (src/gb/anim.c, oam.c, vram_stream.c). Keep them in sync, like audio/song.h for music.
+ * (src/core/anim.c, src/gb/spriteanim.c, oam.c, vram_stream.c). Keep them in sync, like audio/song.h for music.
  *
  * Asset contract (ADR 0006): one .aseprite per character, tags `<action>_<facing>` for the drawn
  * facings S, SE, E, NE, N. Tag user data `dur=<n>/<d>` is the musical length of the WHOLE tag
@@ -26,8 +26,10 @@ typedef struct {
 
 typedef struct {
     const uint8_t *tiles;       /* tile_count * 16 bytes of 2bpp data, in the sprite's ROM bank */
-    const metasprite_t *parts;  /* GBDK metasprite: origin = pivot, tile indices relative to the
-                                 * frame's VRAM slot, terminated by METASPR_TERM */
+    const metasprite_t *parts;  /* one item per 8x16 part, row by row from the top: dy, dx are ABSOLUTE
+                                 * offsets from the pivot (not GBDK's chained deltas, so
+                                 * move_metasprite can't draw these), dtile relative to the frame's
+                                 * VRAM slot; ends with METASPR_TERM. tile_count == 2 * items */
     uint8_t tile_count;         /* <= BUDGET_FRAME_TILES; 8x16 parts count as 2 */
     box_t hitbox;
     box_t hurtbox;
@@ -42,6 +44,13 @@ typedef struct {
     uint8_t hit_frame;          /* or ANIM_NO_HIT */
     uint8_t flags;              /* ANIM_* */
 } sprite_anim_t;
+
+/* Per-anim ROM bank: sprite_<name>_anim_bank[i].bank holds anims[i] (0 for a NULL anim). A struct
+ * because SDCC rejects a plain uint8_t[] initialised with BANK(). */
+#ifndef GEN_SPRITE_BANK_T
+#define GEN_SPRITE_BANK_T
+typedef struct { uint8_t bank; } sprite_bank_t;
+#endif
 
 typedef struct {
     /* [action * DRAWN_FACINGS + drawn facing]; actions are the generated SPRITE_<NAME>_<ACTION>
