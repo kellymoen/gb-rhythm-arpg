@@ -131,6 +131,18 @@ def test_start_screen(variant):
     stop(rom.pb)
 
 
+def test_taps_to_a_click():
+    """ADR 0008: the player taps to a click song (assets/music/calib.mid): 110 BPM, 4/4, no HITS."""
+    rom = Rom("cgb")
+    enter_scene(rom.pb, "calibrate")
+    rom.pb.tick(10, True)
+    m = rom.pb.memory
+    assert m[rom.syms["_music_bpm"]] == 110
+    assert m[rom.syms["_music_beats_per_bar"]] == 4
+    assert m[rom.syms["_music_hit_count"]] == 0
+    stop(rom.pb)
+
+
 def test_late_taps_become_the_saved_offset():
     rom = Rom("cgb")
     enter_scene(rom.pb, "calibrate")
