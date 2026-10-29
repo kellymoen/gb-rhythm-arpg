@@ -1,0 +1,22 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/swing_heavy.toml to replace it.
+# Heavy swing: a slower, darker whoosh that swells and then fades.
+channel = "NOISE"
+priority = 5
+
+[[step]]
+frames = 4
+volume = 3
+env_dir = "up"
+env_pace = 1
+noise_shift = 4
+noise_divisor = 2
+
+[[step]]
+frames = 3
+noise_shift = 5
+
+[[step]]
+frames = 10
+volume = 10
+env_pace = 2
+noise_shift = 6

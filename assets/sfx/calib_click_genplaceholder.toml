@@ -1,0 +1,12 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/calib_click.toml to replace it.
+# A clean click for the latency calibration screen: a high square blip that the hardware length
+# counter cuts after 16 ms, so its onset and length are exact.
+channel = "P1"
+priority = 12
+
+[[step]]
+frames = 2
+volume = 15
+duty = 2
+pitch = "C7"
+length = 4        # 4/256 s

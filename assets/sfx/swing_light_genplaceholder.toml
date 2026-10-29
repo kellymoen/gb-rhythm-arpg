@@ -1,0 +1,22 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/swing_light.toml to replace it.
+# Light swing: a quick whoosh. The envelope swells up, the noise darkens, then it fades fast.
+channel = "NOISE"
+priority = 4
+
+[[step]]
+frames = 3
+volume = 2
+env_dir = "up"
+env_pace = 1
+noise_shift = 2
+noise_divisor = 1
+
+[[step]]
+frames = 2
+noise_shift = 3
+
+[[step]]
+frames = 5
+volume = 7
+env_pace = 1
+noise_shift = 4

@@ -1,0 +1,22 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/hit_heavy.toml to replace it.
+# Heavy hit: a longer snap, then a crunch that drops into a low rumble as it decays.
+channel = "NOISE"
+priority = 7
+
+[[step]]
+frames = 2
+volume = 15
+noise_shift = 2
+noise_width = 7
+
+[[step]]
+frames = 4
+volume = 15
+env_pace = 2
+noise_shift = 5
+noise_width = 15
+noise_divisor = 1
+
+[[step]]
+frames = 10
+noise_shift = 7   # no volume: changes the running noise without retriggering

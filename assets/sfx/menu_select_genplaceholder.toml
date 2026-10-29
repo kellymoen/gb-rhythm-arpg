@@ -1,0 +1,16 @@
+# Placeholder sound effect (docs/sfx.md). Save your own as assets/sfx/menu_select.toml to replace it.
+# Menu confirm: two rising notes.
+channel = "P1"
+priority = 4
+
+[[step]]
+frames = 3
+volume = 9
+duty = 2
+pitch = "E5"
+
+[[step]]
+frames = 9
+volume = 9
+env_pace = 1
+pitch = "A5"
