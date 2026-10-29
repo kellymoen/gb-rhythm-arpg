@@ -3,6 +3,7 @@
 
 #include <stdint.h>
 
+#include "core/banked.h"
 #include "core/beat.h"
 
 /* Beat-relative animation playback (ADR 0004). Portable: the ROM and the host tests share it.
@@ -22,13 +23,9 @@
  * its own ROM bank): copy the ROM table into anim_t.ends and pass that. Per-frame code: 8- and 16-bit
  * adds and compares only; ANIM_ADVANCE_QUIET lets callers skip the call on frames with no event. */
 
-/* Bank 0 is scarce and this code reads no ROM data, so under SDCC it lives in a switchable bank and
- * is called with banked calls. (A compiler attribute, not a GBDK header: the host build ignores it.) */
-#ifdef __SDCC
-#define ANIM_FN __banked
-#else
-#define ANIM_FN
-#endif
+/* This code reads no ROM data, so it lives in a switchable bank (core/banked.h). ANIM_FN is the old name
+ * of CORE_BANKED, kept until anim.c's definitions switch over. */
+#define ANIM_FN CORE_BANKED
 
 /* Same values as gb/spritedata.h, which this portable header cannot include (it needs GBDK). */
 #ifndef ANIM_LOOP
@@ -63,16 +60,16 @@ typedef struct {
  * anim_advance() reports ANIM_EV_FRAME, plus ANIM_EV_HIT when it starts inside its hit frame.
  * Clears any hitstop. */
 void anim_play(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t hit_frame,
-               uint8_t flags, uint16_t start) ANIM_FN;
+               uint8_t flags, uint16_t start) CORE_BANKED;
 
 /* Swap in another ends table of the same action (the character turned to another drawn facing),
  * keeping the musical position, any hitstop and the done state. The next anim_advance() reports
  * ANIM_EV_FRAME, never a second ANIM_EV_HIT. */
 void anim_retarget(anim_t *a, const uint16_t *ends, uint8_t frame_count, uint8_t hit_frame,
-                   uint8_t flags) ANIM_FN;
+                   uint8_t flags) CORE_BANKED;
 
 /* Advance by `ticks` song ticks (see anim_clock_ticks). Returns ANIM_EV_* bits. */
-uint8_t anim_advance(anim_t *a, uint8_t ticks) ANIM_FN;
+uint8_t anim_advance(anim_t *a, uint8_t ticks) CORE_BANKED;
 
 /* Caller-side fast path, for 8-bit targets where a call costs more than the work: if `t` ticks
  * cannot cause any event, move the position and yield 1; else yield 0 and call anim_advance(). */
@@ -80,16 +77,16 @@ uint8_t anim_advance(anim_t *a, uint8_t ticks) ANIM_FN;
 
 /* Hitstop: freeze the visible frame for `ticks` song ticks from now (the longer of this and any
  * freeze already running). The musical position keeps moving underneath. */
-void anim_hitstop(anim_t *a, uint8_t ticks) ANIM_FN;
+void anim_hitstop(anim_t *a, uint8_t ticks) CORE_BANKED;
 
 /* 1 once a one-shot is over (as reported by ANIM_EV_DONE). Loops never finish. */
-uint8_t anim_done(const anim_t *a) ANIM_FN;
+uint8_t anim_done(const anim_t *a) CORE_BANKED;
 
 /* Start position that lines a looping anim up with the song, so a loop of k beats restarts on beats
  * that are multiples of k and a loop of a beat fraction restarts on that subdivision. Supports
  * lengths that divide BEAT_TICKS or are whole beats (k <= 255); any other length returns 0. Call
  * when an anim starts, not every frame (it has a short divide loop). */
-uint16_t anim_loop_phase(const beat_clock_t *now, uint16_t len) ANIM_FN;
+uint16_t anim_loop_phase(const beat_clock_t *now, uint16_t len) CORE_BANKED;
 
 /* Song ticks elapsed between successive beat clock readings (music_now() on the Game Boy). */
 typedef struct {
@@ -98,11 +95,11 @@ typedef struct {
 } anim_clock_t;
 
 /* Remember `now` as the last reading. Call when a scene (or song) starts. */
-void anim_clock_sync(anim_clock_t *c, const beat_clock_t *now) ANIM_FN;
+void anim_clock_sync(anim_clock_t *c, const beat_clock_t *now) CORE_BANKED;
 
 /* Ticks since the last reading, then remember `now`. Saturates at 255. A clock that went backwards
  * (the song restarted) or jumped more than ANIM_CLOCK_MAX_BEATS returns 0 and resyncs. */
 #define ANIM_CLOCK_MAX_BEATS 5
-uint8_t anim_clock_ticks(anim_clock_t *c, const beat_clock_t *now) ANIM_FN;
+uint8_t anim_clock_ticks(anim_clock_t *c, const beat_clock_t *now) CORE_BANKED;
 
 #endif
