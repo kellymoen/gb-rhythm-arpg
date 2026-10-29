@@ -16,7 +16,9 @@
  * the deadline and a job that does not finish carries on in the next call, still hidden. Jobs are
  * served in the order they were added (priority). */
 
-enum { VJ_IDLE, VJ_COPYING, VJ_READY };
+#define VJ_IDLE 0
+#define VJ_COPYING 1
+#define VJ_READY 2
 
 typedef struct {
     const uint8_t *src; /* next byte to copy, in ROM bank `bank` */
@@ -43,6 +45,13 @@ void vram_stream_submit(vram_job_t *j, uint8_t bank, const uint8_t *src, uint8_t
  * jobs became ready. With the LCD off it copies everything. */
 uint8_t vram_stream_update(uint8_t deadline_ly) BANKED;
 extern uint8_t vram_stream_last_bytes; /* bytes copied by the last call, for tests and measurements */
+
+/* VBlank streaming (on: from scene start; off: before leaving the scene). An LCD interrupt at line
+ * 143 copies ~8-9 tiles of the job vram_stream_update() left unfinished, during VBlank, without
+ * waiting for HBlanks; the VBlank ISR then runs ~7 lines later. vram_stream_update() still copies in
+ * the main loop's spare time first. */
+void vram_stream_vblank(uint8_t on) BANKED;
+extern uint8_t vram_stream_vblank_bytes; /* bytes copied by the last handler run */
 
 /* Copy now, however long it takes, waiting for HBlanks as needed (safe with the LCD on). */
 void vram_copy_tiles(uint8_t tile, uint8_t bank, const uint8_t *src, uint8_t tiles) BANKED;

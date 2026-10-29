@@ -37,6 +37,8 @@
  * (only when LY < 132 by then) before the VBlank OAM DMA at 144. */
 #define STREAM_DEADLINE_LY 124
 #define REDRAW_LIMIT_LY 132
+/* PROVISIONAL: a frame whose main loop starts at or after this line does no costly work. */
+#define LATE_START_LY 36
 
 #define ROW_ACTION 1
 #define ROW_FACING 2
@@ -135,7 +137,7 @@ scene_t combat_viewer(void) BANKED;
 scene_t combat_viewer(void) BANKED
 {
     press_t press;
-    uint8_t ev, f, ticks, have_press = 0, shown_action = 0xFF, shown_facing = 0xFF;
+    uint8_t ev, f, ticks, late, have_press = 0, shown_action = 0xFF, shown_facing = 0xFF;
 
     scene_begin();
     hud_init();
@@ -150,6 +152,7 @@ scene_t combat_viewer(void) BANKED
     spriteanim_update(&combat_player, 0);
     spriteanim_update(&combat_dummy, 0);
     vram_stream_update(0xFF); /* LCD off: both first frames now */
+    vram_stream_vblank(1);
     place();
     draw_world();
     text_print(1, ROW_HELP, "DPAD:FACE  A/B:ACT");
@@ -163,12 +166,14 @@ scene_t combat_viewer(void) BANKED
         music_now(&now);
         ticks = anim_clock_ticks(&clock, &now);
 
-        /* Anims first; at most one new frame is shown per video frame. */
-        spriteanim_presents = 1;
+        /* Anims first; at most one new frame is shown per video frame, none when the VBlank ISR ran
+         * long (a press graded on a beat with many note events) and the frame starts late. */
+        late = LY_REG >= LATE_START_LY;
+        spriteanim_presents = !late;
         ev = spriteanim_update(&combat_player, ticks);
         if (spriteanim_update(&combat_dummy, ticks) & ANIM_EV_DONE)
             want |= WANT_DUMMY_IDLE;
-        work = !spriteanim_presents;
+        work = late || !spriteanim_presents;
         if (ev & ANIM_EV_DONE)
             want |= WANT_IDLE;
         if (ev & ANIM_EV_HIT) { /* the player freezes now; the dummy flinches and freezes */
@@ -221,8 +226,10 @@ scene_t combat_viewer(void) BANKED
             }
         }
 
-        if (input_edges() & J_START)
+        if (input_edges() & J_START) {
+            vram_stream_vblank(0);
             return SCENE_MENU;
+        }
 
         /* last: stream tiles in the time left, and show frames that finished in time */
         if (vram_stream_update(STREAM_DEADLINE_LY) && LY_REG < REDRAW_LIMIT_LY) {
