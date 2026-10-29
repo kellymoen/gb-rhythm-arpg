@@ -33,7 +33,7 @@
  *   3. the player's next attack or dodge starts (what matters most for feel goes first)
  *   4. anims advance (at most one new frame shown per video frame), hit frames are judged
  *   5. beat work (dummy telegraph and strike), slow-mo countdown
- *   6. at most one other costly job: hurt / flinch / walk / idle / turn anims
+ *   6. at most one deferred anim job: hurt / flinch / walk / idle / turn anims
  *   7. movement, popups and flash, OAM, HUD, timing overlay, one text job if nothing costly ran
  *   8. tile streaming in the time left, then a late OAM rewrite if a frame finished in time.
  * Each costly step only starts before its LY limit below, so stacked work slips a frame instead of
@@ -64,9 +64,8 @@
 
 /* Shared with combat_events.c and combat_ui.c (combat.h); globals so the ROM tests can read them. */
 combat_stats_t combat_stats;
-uint8_t combat_want, combat_pending, combat_pending_attack, combat_pending_grade, combat_pending_heavy;
-uint8_t combat_pending_held;
-uint8_t combat_attack, combat_attack_grade, combat_attack_heavy;
+uint8_t combat_want, combat_pending, combat_pending_held;
+combat_attack_t combat_next, combat_attack;
 spriteanim_t combat_player, combat_dummy;
 beat_clock_t combat_now;
 int16_t combat_px, combat_py;
@@ -125,15 +124,10 @@ static uint8_t combo_dir(uint8_t held)
     return COMBO_DIR_SIDE;
 }
 
-static int16_t iabs(int16_t v)
-{
-    return v < 0 ? -v : v;
-}
-
 /* 8-way direction of a screen vector (2:1 sectors, no division). */
 static uint8_t dir8(int16_t dx, int16_t dy)
 {
-    int16_t ax = iabs(dx), ay = iabs(dy);
+    int16_t ax = IABS(dx), ay = IABS(dy);
 
     if (ax > (ay << 1))
         return dx > 0 ? FACING_E : FACING_W;
@@ -151,7 +145,7 @@ static uint8_t lock_toward(uint8_t ref)
     int16_t dx = DUMMY_X - px, dy = DUMMY_Y - py, range = tuning.combat_lock_range_px;
     uint8_t f, d;
 
-    if (iabs(dx) > range || iabs(dy) > range)
+    if (IABS(dx) > range || IABS(dy) > range)
         return FACING_COUNT;
     f = dir8(dx, dy);
     d = (uint8_t)(f - ref) & 7;
@@ -267,14 +261,14 @@ static void start_pending(void)
 
     if (combat_pending == PENDING_DODGE) {
         spriteanim_play(&combat_player, SPRITE_PLAYER_DODGE, f, &combat_now);
-        combat_attack = COMBO_NO_ATTACK;
+        combat_attack.attack = COMBO_NO_ATTACK;
         lock = held != FACING_COUNT ? held : (uint8_t)(f + 4) & 7; /* dash direction */
         slide_sx = facing_dx[lock];
         slide_sy = facing_dy[lock];
         slide_left = (uint8_t)tuning.player_dodge_px;
         slide_lunge = 0;
     } else {
-        a = &combos.attacks[combat_pending_attack];
+        a = &combos.attacks[combat_next.attack];
         slide_left = 0;
         lock = lock_toward(held != FACING_COUNT ? held : f);
         if (lock != FACING_COUNT) {
@@ -289,9 +283,7 @@ static void start_pending(void)
         }
         if (!spriteanim_play(&combat_player, attack_action[a->anim], f, &combat_now))
             spriteanim_play(&combat_player, SPRITE_PLAYER_LIGHT1, f, &combat_now); /* missing art */
-        combat_attack = combat_pending_attack;
-        combat_attack_grade = combat_pending_grade;
-        combat_attack_heavy = combat_pending_heavy;
+        combat_attack = combat_next;
         combat_stats.attacks_started++;
     }
     slide_ticks = 0;
@@ -299,8 +291,9 @@ static void start_pending(void)
     combat_pending = PENDING_NONE;
 }
 
-/* At most one of these per frame, in priority order. Returns 1 if it did one. */
-static uint8_t costly(void)
+/* Run one deferred anim job (combat.h WANT_*, then walk / turn / idle), at most one per frame, in
+ * priority order. Returns 1 if it ran one. */
+static uint8_t run_deferred_anim_job(void)
 {
     uint8_t f;
 
@@ -308,7 +301,7 @@ static uint8_t costly(void)
         combat_want &= (uint8_t)~WANT_PLAYER_HURT;
         spriteanim_play(&combat_player, SPRITE_PLAYER_HURT, combat_player.facing, &combat_now);
         combat_busy = 1;
-        combat_attack = COMBO_NO_ATTACK;
+        combat_attack.attack = COMBO_NO_ATTACK;
         slide_left = 0;
         return 1;
     }
@@ -392,7 +385,7 @@ static uint8_t hit_frame_due(uint8_t t)
     const anim_t *a = &combat_player.anim;
     uint8_t k = a->hit_frame;
 
-    if (combat_attack == COMBO_NO_ATTACK || k == ANIM_NO_HIT || !k || a->mframe >= k)
+    if (combat_attack.attack == COMBO_NO_ATTACK || k == ANIM_NO_HIT || !k || a->mframe >= k)
         return 0;
     return a->pos + t >= a->ends[k - 1];
 }
@@ -410,7 +403,7 @@ scene_t combat_scene(void) BANKED
 {
     press_t p;
     combo_input_t in;
-    uint8_t ticks, pticks, dticks, work, late, drained, started, pev, dev, frame, edges, ly, n;
+    uint8_t ticks, pticks, dticks, work, late, drained, started, player_ev, dummy_ev, frame, edges, ly, n;
 
     scene_begin();
     hud_init();
@@ -422,7 +415,7 @@ scene_t combat_scene(void) BANKED
     combat_events_init();
     combo_reset(&combo);
     combat_want = combat_pending = combat_busy = combat_strike_waits = 0;
-    combat_attack = COMBO_NO_ATTACK;
+    combat_attack.attack = COMBO_NO_ATTACK;
     combat_slowmo = 0;
     slide_left = 0;
     divider = carry_p = carry_d = 0;
@@ -473,7 +466,7 @@ scene_t combat_scene(void) BANKED
                 if (!input_pop(&p))
                     break;
                 combat_pending_held = p.held;
-                combat_pending_heavy = p.buttons & J_B ? 1 : 0;
+                combat_next.heavy = p.buttons & J_B ? 1 : 0;
                 combat_popup(p.judgement.grade);
                 in.buttons = (p.buttons & J_A ? COMBO_A : 0) | (p.buttons & J_B ? COMBO_B : 0);
                 in.dir = combo_dir(p.held);
@@ -518,37 +511,37 @@ scene_t combat_scene(void) BANKED
         /* Anims: at most one new frame shown per video frame, none on a busy one. On a very late
          * frame neither character updates (their ticks carry to the next frame, so they stay on
          * the beat; a hit frame lands one frame later). */
-        pev = dev = 0;
+        player_ev = dummy_ev = 0;
         if (started || ly >= VERY_LATE_LY) {
             carry_p = pticks > CARRY_MAX ? CARRY_MAX : pticks;
             carry_d = dticks > CARRY_MAX ? CARRY_MAX : dticks;
         } else {
             carry_p = 0;
             spriteanim_presents = !work && LY_REG < PRESENT_LIMIT_LY;
-            pev = spriteanim_update(&combat_player, pticks);
+            player_ev = spriteanim_update(&combat_player, pticks);
             if (!spriteanim_presents)
                 work = 1;
             /* the dummy waits (its ticks carried) when its update would cost a call on a busy frame */
             if (dticks < combat_dummy.anim.quiet || spriteanim_presents || carry_d >= CARRY_MAX) {
                 carry_d = 0;
-                dev = spriteanim_update(&combat_dummy, dticks);
+                dummy_ev = spriteanim_update(&combat_dummy, dticks);
                 if (!spriteanim_presents)
                     work = 1;
             } else {
                 carry_d = dticks;
             }
         }
-        if (pev & ANIM_EV_HIT) {
+        if (player_ev & ANIM_EV_HIT) {
             slide_finish();
             px = combat_px >> 4;
             py = combat_py >> 4;
             combat_on_hit_frame();
         }
-        if (pev & ANIM_EV_DONE) {
+        if (player_ev & ANIM_EV_DONE) {
             combat_busy = 0;
-            combat_attack = COMBO_NO_ATTACK;
+            combat_attack.attack = COMBO_NO_ATTACK;
         }
-        if (dev & ANIM_EV_DONE)
+        if (dummy_ev & ANIM_EV_DONE)
             combat_want |= WANT_DUMMY_IDLE;
 
         /* beats and musical timers (cheap, every frame) */
@@ -577,7 +570,7 @@ scene_t combat_scene(void) BANKED
         }
 
         if (!work && LY_REG < COSTLY_LIMIT_LY)
-            work = costly();
+            work = run_deferred_anim_job();
 
         /* movement and UI sprites; a very late frame skips them (they catch up next frame) */
         if (ly < VERY_LATE_LY) {

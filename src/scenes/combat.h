@@ -57,8 +57,8 @@ typedef struct {
 } combat_stats_t;
 extern combat_stats_t combat_stats;
 
-/* Costly work (an anim start or turn, ~20-25 scanlines each with SDCC) the frame scheduler runs at
- * most one of per frame, in this priority order. Attacks and dodges are served first, by
+/* Deferred anim jobs (an anim start or turn, ~20-25 scanlines each with SDCC): the frame scheduler
+ * runs at most one per frame (run_deferred_anim_job), in this priority order. Attacks and dodges are served first, by
  * combat_pending. */
 #define WANT_PLAYER_HURT 0x01
 #define WANT_DUMMY_HURT 0x02
@@ -71,13 +71,17 @@ extern uint8_t combat_want;
 #define PENDING_ATTACK 1
 #define PENDING_DODGE 2
 extern uint8_t combat_pending;
-extern uint8_t combat_pending_attack;  /* COMBO_ATTACK_* */
-extern uint8_t combat_pending_grade;   /* grade_t of its press */
-extern uint8_t combat_pending_heavy;   /* B step or a finisher: heavy hit sound */
 extern uint8_t combat_pending_held;    /* D-pad held at the press, for the soft lock and the dodge dash */
 
-/* The attack the player's current anim is playing (its hit frame deals it), or COMBO_NO_ATTACK. */
-extern uint8_t combat_attack, combat_attack_grade, combat_attack_heavy;
+/* An attack step: what to play and how its hit lands. */
+typedef struct {
+    uint8_t attack;  /* COMBO_ATTACK_*, or COMBO_NO_ATTACK */
+    uint8_t grade;   /* grade_t of its press */
+    uint8_t heavy;   /* B step or a finisher: heavy hit sound */
+} combat_attack_t;
+extern combat_attack_t combat_next;    /* the attack the scheduler starts next (PENDING_ATTACK) */
+extern combat_attack_t combat_attack;  /* the one the player's anim is playing: its hit frame deals
+                                        * it once (attack COMBO_NO_ATTACK after that, or none) */
 
 extern spriteanim_t combat_player, combat_dummy;
 extern beat_clock_t combat_now;
@@ -89,6 +93,13 @@ extern uint8_t combat_press_frame;     /* input_frame of the press the matcher i
 extern uint8_t combat_strike_waits;    /* a strike in range waits for a dodge pressed up to... */
 extern uint8_t combat_strike_frame;    /* ...good_window VBlanks after this one, its beat's */
 extern uint8_t combat_dummy_hitstop;   /* hitstop for the dummy's hurt anim when it starts */
+
+/* |v| (a macro: SDCC would turn a function into a call; evaluates v twice). */
+#define IABS(v) ((v) < 0 ? -(v) : (v))
+
+/* The value for a grade_t: one place that maps PERFECT / GOOD / OFFBEAT to a value. */
+#define BY_GRADE(grade, perfect, good, offbeat) \
+    ((grade) == GRADE_PERFECT ? (perfect) : (grade) == GRADE_GOOD ? (good) : (offbeat))
 
 /* combat_events.c */
 void combat_events_init(void) BANKED;

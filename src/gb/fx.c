@@ -8,9 +8,6 @@
 #include "tuning.h"
 
 #define PULSE_FRAMES 3
-#define LEVEL_NORMAL 0
-#define LEVEL_PULSE 1
-#define LEVEL_DIM 2
 
 static uint16_t last_beat = 0xFFFF;
 static uint8_t in_bar; /* beats since the bar's downbeat, counted up: no per-frame modulo */
@@ -18,7 +15,7 @@ static uint8_t pulse, base, shown;
 
 void fx_set_dim(uint8_t on) BANKED
 {
-    base = on ? LEVEL_DIM : LEVEL_NORMAL;
+    base = on ? BRIGHTNESS_DIM : BRIGHTNESS_NORMAL;
 }
 
 void fx_update(void) BANKED
@@ -46,7 +43,7 @@ void fx_update(void) BANKED
     level = base;
     if (pulse) {
         pulse--;
-        level = LEVEL_PULSE;
+        level = BRIGHTNESS_PULSE;
     }
     if (level != shown) {
         shown = level;

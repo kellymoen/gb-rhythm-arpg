@@ -20,6 +20,9 @@
  * stays hidden until the copy is done, so a half-copied word never shows. */
 
 #define CELL_TILES 4
+#define CELL_PERFECT 0
+#define CELL_GOOD 1
+#define CELL_OFF 2
 #define CELL_FX 3
 #define POPUP_ABOVE 46     /* popup top, px above the player's feet */
 #define TELEGRAPH_ABOVE 46 /* "!" top, px above the dummy's feet */
@@ -51,9 +54,11 @@ static uint8_t flash_ticks;
 static uint8_t popup_shown_y, telegraph_shown, strike_shown;
 static uint8_t jobs, name;
 
-/* COMBO_STRING_* order (data/combos.toml); others print as COMBO. */
+/* COMBO_STRING_* order (data/combos.toml); others print as COMBO. Kept by hand until combos.py
+ * emits display names; the check below fails the build when a string is added or removed. */
 static const char *const string_names[] = { "RUSH", "PAUSE", "CRUSH", "CRUSH LUNGE" };
 #define STRING_NAMES (sizeof string_names / sizeof string_names[0])
+typedef char string_names_match_combos_toml[STRING_NAMES == COMBO_STRING_COUNT ? 1 : -1];
 static const char *const other_names[] = { "BREAK", "DODGE", "PERFECT DODGE", "OUCH", "DODGED!", "" };
 
 void combat_ui_init(void) BANKED
@@ -96,7 +101,7 @@ void combat_popup(uint8_t grade) BANKED
 
     if (!tuning.feedback_grade_popups)
         return;
-    cell = grade == GRADE_PERFECT ? 0 : grade == GRADE_GOOD ? 1 : 2;
+    cell = BY_GRADE(grade, CELL_PERFECT, CELL_GOOD, CELL_OFF);
     if (cell != popup_cell) {
         popup_cell = cell;
         popup_ready = 0;

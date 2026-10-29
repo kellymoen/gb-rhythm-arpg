@@ -37,13 +37,6 @@ void combat_events_init(void) BANKED
     dummy_count = 0;
 }
 
-static uint8_t hitstop_for(uint8_t grade)
-{
-    return (uint8_t)(grade == GRADE_PERFECT ? tuning.hitstop_perfect_ticks
-                     : grade == GRADE_GOOD  ? tuning.hitstop_good_ticks
-                                            : tuning.hitstop_offbeat_ticks);
-}
-
 uint8_t combat_dodging(void) BANKED
 {
     return combat_pending == PENDING_DODGE || (combat_busy && combat_player.action == SPRITE_PLAYER_DODGE);
@@ -68,13 +61,13 @@ void combat_on_event(const combo_event_t *e) BANKED
     case COMBO_EV_FINISH:
         a = &combos.attacks[e->attack];
         combat_pending = PENDING_ATTACK;
-        combat_pending_attack = e->attack;
-        combat_pending_grade = e->grade;
+        combat_next.attack = e->attack;
+        combat_next.grade = e->grade;
         if (e->type == COMBO_EV_FINISH)
-            combat_pending_heavy = 1;
+            combat_next.heavy = 1;
         /* the swing sounds at once; the hit sound waits for the hit frame */
         sfx_play(a->sfx != COMBO_NO_SFX ? combo_sfx[a->sfx]
-                 : combat_pending_heavy ? SFX_SWING_HEAVY : SFX_SWING_LIGHT);
+                 : combat_next.heavy ? SFX_SWING_HEAVY : SFX_SWING_LIGHT);
         if (e->step == 0) {
             combat_stats.hits = 0;
             combat_ui_counters();
@@ -105,8 +98,9 @@ void combat_on_event(const combo_event_t *e) BANKED
             combat_stats.strikes_dodged++;
         }
         if (e->grade == GRADE_PERFECT && tuning.slowmo_beats > 0) {
-            beats = (uint8_t)tuning.slowmo_beats;
-            combat_slowmo = ((uint16_t)beats << 5) + ((uint16_t)beats << 4); /* x BEAT_TICKS (48) */
+            /* slowmo.beats x BEAT_TICKS, by addition (no multiply helper) */
+            for (beats = (uint8_t)tuning.slowmo_beats, combat_slowmo = 0; beats; beats--)
+                combat_slowmo += BEAT_TICKS;
             fx_set_dim(1);
             combat_stats.slowmos++;
             sfx_play(SFX_PERFECT);
@@ -123,20 +117,18 @@ void combat_on_hit_frame(void) BANKED
 {
     box_t hb, hu;
     int16_t px = combat_px >> 4, py = combat_py >> 4, ax, ay, bx, by, d;
-    uint8_t atk = combat_attack, dmg, shift, hs;
+    uint8_t atk = combat_attack.attack, dmg, shift, hs;
 
     if (atk == COMBO_NO_ATTACK)
         return;
     if (!spriteanim_hitbox(&combat_player, &hb))
         return;
     spriteanim_hurtbox(&combat_dummy, &hu);
-    combat_attack = COMBO_NO_ATTACK; /* one hit per attack */
+    combat_attack.attack = COMBO_NO_ATTACK; /* one hit per attack */
     if (!hu.w || !hb.w)
         return;
     d = py - DUMMY_Y;
-    if (d < 0)
-        d = -d;
-    if (d > tuning.combat_hit_depth_px)
+    if (IABS(d) > tuning.combat_hit_depth_px)
         return;
     ax = px + hb.x;
     ay = py + hb.y;
@@ -146,7 +138,7 @@ void combat_on_hit_frame(void) BANKED
         return;
 
     dmg = combos.attacks[atk].damage;
-    if (combat_attack_grade == GRADE_OFFBEAT) {
+    if (combat_attack.grade == GRADE_OFFBEAT) {
         shift = (uint8_t)tuning.combat_offbeat_damage_shift;
         for (; shift && dmg; shift--)
             dmg >>= 1;
@@ -161,12 +153,13 @@ void combat_on_hit_frame(void) BANKED
 
     /* hitstop on both characters; the dummy's flinch starts when the frame budget allows and
      * carries the freeze with it */
-    hs = hitstop_for(combat_attack_grade);
+    hs = (uint8_t)BY_GRADE(combat_attack.grade, tuning.hitstop_perfect_ticks, tuning.hitstop_good_ticks,
+                           tuning.hitstop_offbeat_ticks);
     spriteanim_hitstop(&combat_player, hs);
     spriteanim_hitstop(&combat_dummy, hs);
     combat_dummy_hitstop = hs;
     combat_want = (combat_want & (uint8_t)~WANT_DUMMY_IDLE) | WANT_DUMMY_HURT;
-    sfx_play(combat_attack_heavy ? SFX_HIT_HEAVY : SFX_HIT);
+    sfx_play(combat_attack.heavy ? SFX_HIT_HEAVY : SFX_HIT);
     combat_flash();
 }
 
@@ -177,10 +170,8 @@ static void strike(void)
     uint16_t pos;
 
     combat_stats.strikes++;
-    if (dx < 0)
-        dx = -dx;
-    if (dy < 0)
-        dy = -dy;
+    dx = IABS(dx);
+    dy = IABS(dy);
     sfx_play(SFX_SWING_HEAVY);
     if (dx > range || (dy << 1) > range) { /* a whiff: the mark shows in front of the dummy */
         combat_strike_mark(DUMMY_X + ((combat_px >> 4) < DUMMY_X ? -12 : 12), DUMMY_Y - 14);
