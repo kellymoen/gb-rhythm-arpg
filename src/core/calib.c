@@ -1,11 +1,15 @@
+#ifdef __SDCC
+#pragma bank 255
+#endif
+
 #include "core/calib.h"
 
-void calib_reset(calib_t *c)
+void calib_reset(calib_t *c) CALIB_FN
 {
     c->count = 0;
 }
 
-uint8_t calib_add(calib_t *c, int8_t frames)
+uint8_t calib_add(calib_t *c, int8_t frames) CALIB_FN
 {
     uint8_t j;
 
@@ -19,7 +23,7 @@ uint8_t calib_add(calib_t *c, int8_t frames)
     return c->count == CALIB_TAPS;
 }
 
-void calib_result(const calib_t *c, calib_result_t *r)
+void calib_result(const calib_t *c, calib_result_t *r) CALIB_FN
 {
     const int8_t *s = c->sorted;
     uint8_t n = c->count, mid;

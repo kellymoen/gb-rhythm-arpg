@@ -1,3 +1,5 @@
+#pragma bank 255
+
 #include <gb/gb.h>
 
 #include "audio/sfx.h"
@@ -28,7 +30,10 @@ static void draw_cursor(uint8_t old)
     text_print(2, ROW_FIRST + cursor * 2, ">");
 }
 
-scene_t menu_run(void)
+/* Global, not static: bankpack only assigns a bank to global b_ symbols. */
+scene_t menu_scene(void) BANKED;
+
+scene_t menu_scene(void) BANKED
 {
     uint8_t i, old, edges;
 
@@ -60,4 +65,10 @@ scene_t menu_run(void)
             draw_cursor(old);
         }
     }
+}
+
+/* Bank 0 entry point for main()'s scene table; the menu itself lives in a switchable bank. */
+scene_t menu_run(void) NONBANKED
+{
+    return menu_scene();
 }

@@ -1,3 +1,5 @@
+#pragma bank 255
+
 #include <gb/gb.h>
 
 #include "audio/music.h"
@@ -6,7 +8,7 @@
 #include "gb/video.h"
 #include "scenes/scene.h"
 
-void scene_begin(void)
+void scene_begin(void) BANKED
 {
     uint8_t i;
 
@@ -23,7 +25,7 @@ void scene_begin(void)
     isr_hit_cancel();
 }
 
-void scene_show(void)
+void scene_show(void) BANKED
 {
     DISPLAY_ON;
 }
