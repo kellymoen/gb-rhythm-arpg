@@ -146,7 +146,7 @@ run: $(ROM)
 
 # Hear the current song as the Game Boy plays it (headless emulation -> build/listen.wav).
 listen: $(ROM)
-	$(PYTOOLS) gbtools.listen $(ROM) build/listen.wav $(or $(SECONDS),20)
+	$(PYTOOLS) gbtools.listen $(ROM) build/listen.wav $(or $(SECONDS),20) $(if $(COMBAT),--combat)
 	open build/listen.wav
 
 # Write missing placeholder assets (never overwrites; see tools/gbtools/placeholders.py).

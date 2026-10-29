@@ -33,3 +33,5 @@ hit_flash = 1        # [0..1]
 hit_flash_ticks = 6  # [0..24] how long a hit target flashes
 grade_popups = 1     # [0..1]
 musical_hits = 1     # [0..1] on-beat A/B presses play the song's hit instrument
+musical_hit_frames = 10   # [1..30] how long a musical hit holds P2 (frames: a sound length, not combat timing)
+musical_hit_volume = 15   # [1..15] musical hit volume

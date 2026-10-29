@@ -17,6 +17,9 @@ the author confirms or overturns it; then move it to "Settled" with the date, or
 | 9 | M2 | Placeholder anim timings | Attacks 1/8 (finisher and heavies 1/4), idle 1/2 loop, walk 1/4 loop, dodge and hurt 1/8 | `assets/sprites/player_genplaceholder.aseprite` |
 | 10 | M2 | Combo details | Attacks jab1–4, wide, smash1–2, lunge with damage 2/2/2/3/8/4/7/7 and lunge 4/4/4/6/8/2/4/24 px. A plain step accepts any held direction; a direction variant wins only when its direction is held. A second press on a slot already taken does nothing. A dodge ends the string. A string may not be the start of a longer one. `unlock` is stored but not enforced | `data/combos.toml`, `src/core/combo.c` |
 | 11 | M2 | Lunge | `combat.lunge_px` is now a cap on per-attack lunge distances | `data/tuning.toml` |
+| 12 | M2 | SFX file format (asset contract — please review) | One TOML per effect: `channel`, `priority`, up to 16 `[[step]]` tables. A step with `volume` retriggers the channel, and a step without it changes the running sound. Envelope, length, sweep and wave apply only on trigger steps | `docs/sfx.md` |
+| 13 | M2 | SFX channels and priorities | NOISE: swings 4/5, hits 6/7. P1: dodge 6, perfect 10, menu 3/4, calibration click 12. WAVE: string break 5. P2: musical hits 8 | `assets/sfx/*_genplaceholder.toml` |
+| 14 | M2 | Musical hit sound | 10 frames at volume 15. Combat song HITS set: A4 C5 D5 E5 G5 A5 C6 | `data/tuning.toml`, `assets/music/combat_genplaceholder.mid` |
 | 7 | M2 | Hitstop / flash / slow-mo amounts | Hitstop 8/5/2 ticks (PERFECT/GOOD/OFFBEAT), flash 6 ticks, slow-mo 2 beats at 1/2 enemy rate | `data/tuning.toml` |
 
 ## Settled

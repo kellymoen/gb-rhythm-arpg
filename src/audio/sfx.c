@@ -4,6 +4,7 @@
 #include "audio/music.h"
 #include "audio/sfx.h"
 #include "audio/sfxdata.h"
+#include "tuning.h"
 
 /* Stays in bank 0 (it runs in the VBlank ISR and switches to the effect data's bank).
  *
@@ -15,7 +16,6 @@
  * No 16-bit multiply/divide here: pointers step by addition and the hit pitch wraps by subtraction. */
 
 #define QUEUE_SIZE 4 /* power of two */
-#define HIT_FRAMES 10
 
 sfx_chan_t sfx_chan[4];
 volatile uint8_t sfx_hit_step;
@@ -259,8 +259,8 @@ void sfx_hit(void)
         n -= music_hit_count;
     note = music_hits[n];
     freq.w = music_note_freq[note];
-    hit_step.frames = HIT_FRAMES;
-    hit_step.volume = 15;
+    hit_step.frames = (uint8_t)tuning.feedback_musical_hit_frames;
+    hit_step.volume = (uint8_t)tuning.feedback_musical_hit_volume;
     hit_step.env_dir = ins->env >> 3;
     hit_step.env_pace = ins->env & 7;
     hit_step.duty = ins->duty;

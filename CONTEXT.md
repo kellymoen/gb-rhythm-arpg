@@ -37,8 +37,11 @@ Use these terms in code, comments, data files and docs. If a new concept appears
 - **Attack token** — permission to attack; only 1–2 enemies hold one at a time.
 - **Soft lock** — an attack turns toward the nearest enemy in the held direction (or the last
   target) and **lunges** up to `lunge_px`.
-- **Musical hit** — a combo-hit sound played with the song's hit instrument at a pitch from the
-  song's `HITS` pitch set, quantized to the beat.
+- **Musical hit** — a combo-hit sound played with the song's hit instrument: hit N of a string plays
+  pitch N of the song's `HITS` set. OFFBEAT presses play none.
+- **Sound effect (SFX)** — a register-level effect from `assets/sfx/<name>.toml`, played on one channel.
+- **Channel stealing** — an SFX or musical hit takes its channel from the music (or a lower
+  **priority** effect); the music keeps time silently there and resumes on its next note.
 
 ## World and rendering
 - **World coords** — logical ground-plane position in subpixels (16 per pixel), `wx`, `wy`.
