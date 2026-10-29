@@ -41,7 +41,9 @@ Use these terms in code, comments, data files and docs. If a new concept appears
 - **Soft lock** — an attack turns toward the nearest enemy in the held direction (or the last
   target) and **lunges** up to `lunge_px`.
 - **Musical hit** — a combo-hit sound played with the song's hit instrument: hit N of a string plays
-  pitch N of the song's `HITS` set. OFFBEAT presses play none.
+  pitch N of the song's `HITS` set. Only presses that become combo steps play one (not OFFBEAT steps,
+  dodges or ignored presses). It waits `dodge_grace` frames (an A+B would cancel it) and, with
+  `quantize_hits`, sounds on its step slot's beat position.
 - **Sound effect (SFX)** — a register-level effect from `assets/sfx/<name>.toml`, played on one channel.
 - **Channel stealing** — an SFX or musical hit takes its channel from the music (or a lower
   **priority** effect); the music keeps time silently there and resumes on its next note.

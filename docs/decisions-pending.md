@@ -37,6 +37,15 @@ the author confirms or overturns it; then move it to "Settled" with the date, or
 | 28 | M2 | Musical-hit timing | With `feedback.quantize_hits` (1) a hit sounds on its step slot's beat position: an early press waits for the slot, an on-time or late one plays as soon as it is known. A hit never plays before `input.dodge_grace` frames after its press (a dodge must play none), so on-time and late presses sound 2 frames after the press. One hit is scheduled at a time; a newer one replaces one that has not played | `src/gb/isr.c` |
 | 29 | M2 | Menu sounds | SFX_MENU_MOVE on a cursor move, SFX_MENU_SELECT on a pick; the select sound starts with the next scene (the LCD is off while it loads) | `src/scenes/menu.c` |
 
+### Questions raised in M2 (no provisional answer yet)
+
+| # | Since | Area | Question |
+|---|-------|------|----------|
+| 30 | M2 | Grade windows vs tempo | At 140 BPM an 8th-note slot is about 12.9 frames wide, so no press can be more than 6 frames off. With `good_window` = 6, OFFBEAT is impossible after bar 5. Should the windows scale with the slot length, e.g. as a fraction of it? |
+| 31 | M2 | Perfect dodge with nothing to dodge | A PERFECT dodge starts slow-mo even when no strike is coming. Should slow-mo need a strike within range? |
+| 32 | M2 | Sprite palettes (deferred) | ADR 0006's `assets/palettes.aseprite` (layers and tags map to palettes) is not implemented. Sprites use one 4-shade palette. Proposed for M4 juice, unless you want it in M3 |
+| 33 | M2 | Debug menu in combat | The generated debug menu is in the rhythm test only. In combat, Select toggles the timing overlay, and A/B attack. The feel lab covers combat tuning. Add an in-combat menu in M3? |
+
 ## Settled
 
 | Date | Decision |
