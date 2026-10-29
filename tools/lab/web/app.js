@@ -15,76 +15,188 @@ function say(text, err) { const m = $("msg"); m.textContent = text; m.className 
 const guard = (fn) => async (...a) => { try { await fn(...a); } catch (e) { say(e.message, true); } };
 
 // ---- sliders --------------------------------------------------------------------------------
-function build(tables) {
-  const root = $("tables"); root.innerHTML = "";
+// Layout: one collapsible block per table; tables with several source files get one block per file
+// (e.g. one per sound effect); inside, one group per TOML table the fields live in. Rows of array
+// elements past their array_length field's value are hidden. The filter box narrows everything.
+const els = { tables: new Map(), sources: new Map(), groups: new Map() };
+const lastReal = {};
+
+const fileName = (src) => src.split("/").pop().replace(/_genplaceholder/, "").replace(/\.toml$/, "");
+function pretty(parts) { // ["step", 0] -> "step 1": array indices are shown 1-based, as the converters say them
+  const out = [];
+  for (const p of parts) typeof p === "number" ? (out[out.length - 1] = `${out[out.length - 1] ?? ""} ${p + 1}`.trim()) : out.push(p);
+  return out.join(" · ");
+}
+function button(text, title, fn) { const b = document.createElement("button"); b.textContent = text; b.title = title; b.onclick = guard(fn); return b; }
+function describeSave(r) {
+  const parts = Object.entries(r.saved).map(([k, n]) => `${k}: ${n} changed`);
+  $("save-errors").textContent = (r.errors || []).join("\n");
+  $("save-errors").hidden = !(r.errors || []).length;
+  say(parts.length ? "saved " + parts.join(", ") : r.errors && r.errors.length ? "nothing saved (see below)" : "nothing to save", !!(r.errors || []).length);
+}
+
+function details(cls, title, open) {
+  const d = document.createElement("details"); d.className = cls; d.open = open;
+  const s = document.createElement("summary"); const t = document.createElement("span"); t.className = "title"; t.textContent = title;
+  const extra = document.createElement("span"); extra.className = "tools";
+  s.append(t, extra); d.append(s);
+  return { d, extra, title: t };
+}
+
+function ensureTable(t) {
+  if (els.tables.has(t.name)) return els.tables.get(t.name);
+  const many = t.fields.length > 30;
+  const { d, extra, title } = details("table", `${t.name}`, !many);
+  const meta = document.createElement("small"); meta.className = "muted"; meta.textContent = `${t.fields.length} fields · ${t.sources.length > 1 ? t.sources.length + " files" : t.source}`;
+  title.append(" ", meta);
+  extra.append(
+    button("Save", "write this table's changed values into its TOML file(s)", () => api("/api/save", { table: t.name }).then(describeSave)),
+    button("Reset", "restore this table's defaults", () => api("/api/reset", { table: t.name }).then(refresh)));
+  for (const b of extra.children) b.addEventListener("click", (e) => e.stopPropagation());
+  const body = document.createElement("div"); body.className = "body"; d.append(body);
+  $("tables").append(d);
+  const rec = { d, body, t, many };
+  els.tables.set(t.name, rec);
+  return rec;
+}
+
+function ensureSource(t, src) {
+  const tr = ensureTable(t), key = t.name + "|" + src;
+  if (t.sources.length <= 1) return tr.body;
+  if (els.sources.has(key)) return els.sources.get(key).body;
+  const { d, extra, title } = details("source", fileName(src), false);
+  title.title = src;
+  extra.append(
+    button("Save", `write changes into ${src}`, () => api("/api/save", { table: t.name, source: src }).then(describeSave)),
+    button("Reset", "restore this file's defaults", () => api("/api/reset", { table: t.name, source: src }).then(refresh)));
+  for (const b of extra.children) b.addEventListener("click", (e) => e.stopPropagation());
+  const body = document.createElement("div"); body.className = "body"; d.append(body);
+  tr.body.append(d);
+  els.sources.set(key, { d, body });
+  return body;
+}
+
+function ensureGroup(t, f) {
+  const parent = ensureSource(t, f.source);
+  const gp = f.path.slice(0, -1), key = t.name + "|" + f.source + "|" + gp.join(".");
+  if (els.groups.has(key)) return els.groups.get(key);
+  const { d, title } = details("group", gp.length ? pretty(gp) : "(effect)", !els.tables.get(t.name).many);
+  if (!gp.length) title.textContent = t.sources.length > 1 ? "settings" : "(root)";
+  const body = document.createElement("div"); body.className = "body"; d.append(body);
+  parent.append(d);
+  els.groups.set(key, body);
+  return body;
+}
+
+function addFields(tables) {
   for (const t of tables) {
-    const wrap = document.createElement("div");
-    const head = document.createElement("div"); head.className = "table-head";
-    head.innerHTML = `<b>${t.name}</b><small>${t.source}</small>`;
-    for (const [label, fn] of [["Save", () => api("/api/save", { table: t.name }).then((r) => say(`saved ${t.source}: ${r.saved[t.name] || 0} value(s) changed`))],
-                               ["Reset", () => api("/api/reset", { table: t.name }).then(refresh)]]) {
-      const b = document.createElement("button"); b.textContent = label; b.onclick = guard(fn); head.append(b);
-    }
-    wrap.append(head);
-    const groups = new Map();
     for (const f of t.fields) {
+      if (state.fields[f.id]) continue;
       state.fields[f.id] = f;
-      const g = f.path.slice(0, -1).join(".") || "(root)";
-      if (!groups.has(g)) groups.set(g, []);
-      groups.get(g).push(f);
+      f.table = t.name;
       if (f.path.join(".") === "timing.latency_offset") state.latencyId = f.id;
+      ensureGroup(t, f).append(fieldRow(f));
     }
-    for (const [g, fs] of groups) {
-      const d = document.createElement("details"); d.open = groups.size <= 8 || g === "timing";
-      d.innerHTML = `<summary>${g}</summary>`;
-      fs.forEach((f) => d.append(fieldRow(f)));
-      wrap.append(d);
-    }
-    root.append(wrap);
   }
+}
+
+function build(tables) {
+  $("tables").innerHTML = "";
+  els.tables.clear(); els.sources.clear(); els.groups.clear();
+  state.fields = {};
+  addFields(tables);
+}
+
+function rowLabel(f) {
+  const last = f.path[f.path.length - 1];
+  return typeof last === "number" ? `${f.path[f.path.length - 2]} ${last + 1}` : last;
 }
 
 function fieldRow(f) {
   const row = document.createElement("div"); row.className = "field" + (f.available ? "" : " disabled"); row.id = "row-" + f.id;
-  const name = f.path[f.path.length - 1];
+  row.dataset.text = [f.label, f.doc, fileName(f.source), f.table].join(" ").toLowerCase();
   let control;
   if (f.type === "enum") {
     control = document.createElement("select");
-    for (const [k, v] of Object.entries(f.values)) control.add(new Option(k, v));
+    for (const [k, v] of Object.entries(f.values)) control.add(new Option(k === "" ? "(none)" : k, v));
   } else {
-    control = document.createElement("input"); control.type = "range"; control.min = f.min; control.max = f.max; control.step = 1;
+    control = document.createElement("input"); control.type = "range"; control.min = f.min; control.max = f.max; control.step = f.step || 1;
   }
   control.id = "in-" + f.id; control.disabled = !f.available;
-  const num = document.createElement("input"); num.className = "num"; num.type = "number"; num.min = f.min; num.max = f.max; num.id = "num-" + f.id; num.disabled = !f.available;
-  const undo = document.createElement("button"); undo.className = "icon"; undo.textContent = "↺"; undo.title = "reset to default (" + f.default + ")";
-  const label = document.createElement("label"); label.htmlFor = control.id; label.textContent = name; label.title = f.label + (f.restart ? " (needs ROM restart)" : "");
+  const val = document.createElement("div"); val.className = "val";
+  const num = document.createElement("input"); num.className = "num"; num.type = "number"; num.min = f.min; num.max = f.max; num.step = f.step || 1; num.id = "num-" + f.id; num.disabled = !f.available;
+  if (f.type !== "enum") val.append(num);
+  let unset = null;
+  if (f.none !== undefined) {
+    unset = document.createElement("input"); unset.type = "checkbox"; unset.id = "unset-" + f.id; unset.title = "unset: the TOML key is absent (the value from the previous step carries on)";
+    const lab = document.createElement("label"); lab.className = "unset"; lab.append(unset, " unset"); val.append(lab);
+    unset.onchange = () => send(unset.checked ? f.none : (lastReal[f.id] ?? (f.default !== f.none ? f.default : f.min)));
+  }
+  const undo = document.createElement("button"); undo.className = "icon"; undo.textContent = "↺"; undo.title = "reset to default (" + (f.default === f.none ? "unset" : f.type === "enum" ? Object.keys(f.values).find((k) => f.values[k] === f.default) : f.default) + ")";
+  const label = document.createElement("label"); label.htmlFor = control.id; label.textContent = rowLabel(f); label.title = f.label + (f.restart ? " (needs ROM restart)" : "");
   if (f.restart) { const b = document.createElement("span"); b.className = "badge"; b.textContent = "restart"; label.append(" ", b); }
-  const send = (v) => { v = Number(v); if (Number.isNaN(v)) return; state.values[f.id] = v; paint(f.id); api("/api/set", { id: f.id, value: v }).catch((e) => say(e.message, true)); };
+  if (f.absent) { const b = document.createElement("span"); b.className = "badge"; b.textContent = "not in file"; b.title = "the TOML does not set this yet; saving adds it once it differs from the default"; label.append(" ", b); }
+  const send = (v) => {
+    v = Number(v); if (Number.isNaN(v)) return;
+    state.values[f.id] = v; paint(f.id);
+    api("/api/set", { id: f.id, value: v }).then(() => { if (f.array_length) syncRows(); }).catch((e) => say(e.message, true));
+    if (f.array_length) layout();
+  };
   const begin = () => (state.dragging = f.id), end = () => (state.dragging = null);
   control.addEventListener("pointerdown", begin); control.addEventListener("focus", begin); control.addEventListener("blur", end);
   window.addEventListener("pointerup", end);
   control.oninput = () => send(control.value);
   num.onfocus = begin; num.onblur = end; num.onchange = () => send(Math.max(f.min, Math.min(f.max, Number(num.value))));
   undo.onclick = () => send(f.default);
-  row.append(label, control, num, undo);
-  if (f.doc) { const d = document.createElement("div"); d.className = "doc"; d.textContent = f.doc + (f.type === "enum" ? "" : `  [${f.min}..${f.max}]`); row.append(d); }
+  row.append(label, control, val, undo);
+  if (f.doc) { const d = document.createElement("div"); d.className = "doc"; d.textContent = f.doc + (f.type === "enum" ? "" : `  [${f.min}..${f.max}${f.none !== undefined ? ", or unset" : ""}]`); row.append(d); }
   return row;
 }
 
 function paint(id) {
   const f = state.fields[id], v = state.values[id];
-  if (v === undefined) return;
-  const c = $("in-" + id), n = $("num-" + id);
-  if (c && document.activeElement !== c) c.value = v;
-  if (n && document.activeElement !== n) n.value = v;
+  if (v === undefined || !f) return;
+  const c = $("in-" + id), n = $("num-" + id), u = $("unset-" + id);
+  const isNone = f.none !== undefined && v === f.none;
+  if (!isNone) lastReal[id] = v;
+  if (u) { u.checked = isNone; c.disabled = n.disabled = isNone || !f.available; }
+  if (c && document.activeElement !== c) c.value = isNone ? (lastReal[id] ?? f.default) : v;
+  if (n && document.activeElement !== n) n.value = isNone ? "" : v;
   $("row-" + id).classList.toggle("changed", v !== f.default);
+}
+
+// Rows of array elements past their length field's value are hidden; the filter hides non-matches;
+// groups, files and tables with nothing visible disappear and, while filtering, matches are opened.
+function layout() {
+  const q = $("filter").value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+  const touched = new Set();
+  for (const id in state.fields) {
+    const f = state.fields[id], row = $("row-" + id);
+    if (!row) continue;
+    const lenId = f.array && f.array.length;
+    const cut = lenId && state.values[lenId] !== undefined && f.array.index >= state.values[lenId];
+    const miss = q.length && !q.every((w) => row.dataset.text.includes(w));
+    row.hidden = !!(cut || miss);
+    if (!row.hidden) for (let e = row.parentElement; e && e.id !== "tables"; e = e.parentElement) touched.add(e);
+  }
+  document.querySelectorAll("#tables details").forEach((d) => {
+    const show = touched.has(d.querySelector(":scope > .body")) || !!d.querySelector(".field:not([hidden])");
+    d.hidden = !show;
+    if (q.length && show) d.open = true;
+  });
+}
+
+async function syncRows() { // new step slots become listed once the length reaches them
+  const j = await api("/api/state");
+  addFields(j.tables); await refresh();
 }
 
 async function refresh() {
   const j = await api("/api/values");
-  if (state.dragging === null) { state.values = j.values; for (const id in j.values) paint(id); }
+  if (state.dragging === null) { state.values = j.values; for (const id in j.values) paint(id); layout(); }
   status(j.status); replays(j.replays);
 }
+$("filter").oninput = layout;
 
 // ---- status, record, replay ------------------------------------------------------------------
 function status(st) {
@@ -117,7 +229,7 @@ $("rec-stop").onclick = guard(async () => {
   const name = $("rec-name").value.trim(); if (!name) throw new Error("type a replay name first");
   const r = await api("/api/record", { action: "stop", name }); say("saved " + r.saved);
 });
-$("save-all").onclick = guard(() => api("/api/save", {}).then((r) => say("saved: " + Object.entries(r.saved).map(([k, n]) => `${k} ${n} changed`).join(", "))));
+$("save-all").onclick = guard(() => api("/api/save", {}).then(describeSave));
 $("reset-all").onclick = guard(() => api("/api/reset", {}).then(refresh));
 $("cancel-replay").onclick = guard(() => api("/api/replay", { action: "cancel" }));
 
