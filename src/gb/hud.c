@@ -32,27 +32,44 @@ void hud_init(void)
     SHOW_WIN;
 }
 
+/* Per frame: no divide or multiply helpers (SDCC's 8-bit divide alone costs ~5 scanlines). The slot
+ * length is recomputed only when steps_per_beat changes, the slot index by subtraction, and the pips
+ * are written straight into shadow OAM. */
 void hud_update(void)
 {
+    static uint8_t spb_seen, slot_ticks;
     uint8_t spb = (uint8_t)tuning.timing_steps_per_beat;
-    uint8_t slot_ticks = BEAT_TICKS / spb; /* the only division: per-pip math is additions */
+    OAM_item_t *o = &shadow_OAM[OAM_HUD];
     beat_clock_t now;
     uint8_t ahead, in_beat, i;
 
+    if (!tuning.feedback_hud_metronome) {
+        for (i = 0; i < HUD_PIPS; i++, o++)
+            o->y = 0;
+        return;
+    }
+    if (spb != spb_seen) {
+        spb_seen = spb;
+        slot_ticks = BEAT_TICKS / spb;
+    }
     music_now(&now);
-    in_beat = now.tick / slot_ticks;                /* slot index within the beat, 0..spb-1 */
-    ahead = slot_ticks - (now.tick - in_beat * slot_ticks);
-    in_beat++;
-    for (i = 0; i < HUD_PIPS; i++) {
-        if (!tuning.feedback_hud_metronome || ahead > LOOKAHEAD) {
-            hide_sprite(i);
+    ahead = now.tick;
+    in_beat = 1; /* the slot index within the beat of the first pip, 0..spb-1 */
+    while (ahead >= slot_ticks) {
+        ahead -= slot_ticks;
+        in_beat++;
+    }
+    ahead = slot_ticks - ahead;
+    for (i = 0; i < HUD_PIPS; i++, o++) {
+        if (ahead > LOOKAHEAD) {
+            o->y = 0;
             continue;
         }
         if (in_beat == spb)
             in_beat = 0;
-        set_sprite_tile(i, in_beat ? SPR_PIP : SPR_BEAT_PIP);
-        move_sprite(i, (uint8_t)(DEVICE_SPRITE_PX_OFFSET_X + MARKER_X - PIP_CENTRE) + ahead,
-                    (uint8_t)(DEVICE_SPRITE_PX_OFFSET_Y + HUD_Y));
+        o->tile = in_beat ? SPR_PIP : SPR_BEAT_PIP;
+        o->y = (uint8_t)(DEVICE_SPRITE_PX_OFFSET_Y + HUD_Y);
+        o->x = (uint8_t)(DEVICE_SPRITE_PX_OFFSET_X + MARKER_X - PIP_CENTRE) + ahead;
         ahead += slot_ticks;
         in_beat++;
     }

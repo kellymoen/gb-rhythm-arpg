@@ -32,7 +32,8 @@
 /* LCD, sprite mode and palettes for both DMG and CGB. Call with the display off. */
 void video_init(void);
 
-/* 0 = normal, 1 = one shade lighter (used by the beat pulse). */
-void video_set_brightness(uint8_t lighter);
+/* 0 = normal, 1 = one shade lighter (the beat pulse), 2 = colours 1-3 one shade darker, colour 0
+ * unchanged so sprites stay readable (the slow-mo cue). */
+void video_set_brightness(uint8_t level);
 
 #endif
