@@ -17,20 +17,6 @@ Rewritten by the orchestrator at the end of every session, for the next one. Rea
   calibration + overlay), integration, review, gate. The breakdown is in
   `~/.claude/plans/you-are-an-orchestrator-snoopy-iverson.md`.
 
-## To fold into docs/perf.md after the audio package merges (it owns perf.md this wave)
-Combo matcher costs, measured with TIMA:
-
-| Call | Scanlines |
-|------|-----------|
-| `combo_tick`, idle | 1.4 |
-| `combo_tick`, in a string | 7.4 |
-| `combo_tick`, break | 9.0 |
-| Press that starts, continues or finishes a string | 17–19 |
-| Worst press (break and restart) | 28.8 |
-| `beat_judge` at latency 15 | 12.9 (no multiply or divide helpers any more) |
-
-If the combat frame gets tight, the next lever is `probe()` in assembly.
-
 ## Not verified / known gaps
 - `BUDGET_STREAM_BYTES` is a guess until the sprite runtime measures VRAM copy cost.
 

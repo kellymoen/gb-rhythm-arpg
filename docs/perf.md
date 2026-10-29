@@ -50,6 +50,21 @@ Still open: an assembly `run_event`/`music_update` (3–5× likely) is the next 
 tight. A song with many simultaneous events on one frame (e.g. all four channels change instrument and
 start notes on the downbeat) costs ~4.5 lines per event until then.
 
+## M2 combo matcher (2026-10-29)
+
+Measured with TIMA in a scratch ROM, interrupts off, banked call included.
+
+| Call | Scanlines |
+|------|-----------|
+| `combo_tick`, idle | 1.4 |
+| `combo_tick`, in a string | 7.4 |
+| `combo_tick`, break | 9.0 |
+| Press that starts, continues or finishes a string | 17–19 |
+| Worst press (break and restart) | 28.8 |
+| `beat_judge` at latency 15 | 12.9 (no multiply or divide helpers any more) |
+
+If the combat frame gets tight, the next lever is `probe()` in assembly.
+
 ## Lessons
 
 - The first `hud_update` called `beat_ticks_until_slot` (16-bit multiply/divide) for each of 8 pips
