@@ -54,6 +54,11 @@ def tempo_rate(bpm: float) -> int:
     return round(BEAT_TICKS * bpm / 60 / FPS * 256)
 
 
+def tempo_event(bpm: float) -> bytes:
+    """EV_TEMPO <rate lo> <rate hi> <bpm for display, 1-255>."""
+    return bytes([EV_TEMPO]) + tempo_rate(bpm).to_bytes(2, "little") + bytes([max(1, min(255, round(bpm)))])
+
+
 # --- instruments -------------------------------------------------------------------------------
 
 
@@ -282,18 +287,19 @@ def _channel_events(path, tl, track, name, kind, ins: InstrumentSet) -> tuple[li
 
 
 def _state_at(changes, tick) -> list[bytes]:
-    """Event bytes that restore instrument/duty/bend/vibrato as they were just before `tick`."""
-    state = {}
+    """Event bytes that restore instrument/duty/bend/vibrato at the loop point as they were just before
+    `tick`. Only values the song changes after that point need restoring: every event in a loop frame
+    costs ISR time (docs/perf.md)."""
+    before: dict[str, int] = {"bend": 0, "vib": 0}  # music_play's defaults
+    after: dict[str, int] = dict(before)
     for t, key, value in changes:
         if t < tick:
-            state[key] = value
+            before[key] = value
+        after[key] = value
     out = []
-    if "instr" in state:
-        out.append(bytes([EV_INSTR, state["instr"]]))
-    if "duty" in state:
-        out.append(bytes([EV_DUTY, state["duty"]]))
-    out.append(bytes([EV_BEND, state.get("bend", 0) & 0xFF]))
-    out.append(bytes([EV_VIB, state.get("vib", 0)]))
+    for key, op in (("instr", EV_INSTR), ("duty", EV_DUTY), ("bend", EV_BEND), ("vib", EV_VIB)):
+        if key in before and before[key] != after[key]:
+            out.append(bytes([op, before[key] & 0xFF]))
     return out
 
 
@@ -312,14 +318,18 @@ def _encode(events: list[Event]) -> bytes:
 
 
 def _frame(path, tl, name, events, loop_tick, end_tick, restore: list[bytes], off_at_end: bool):
+    """Add the loop and end framing. music_play() starts with the loop pointer at the stream start, so a
+    loop at tick 0 needs no EV_LOOP; and an OFF at the end is redundant when a note starts the loop."""
     for e in events:
         if e.tick >= end_tick:
             raise ConvertError(path, f"{tl.where(name, e.tick)}: event after the song end "
                                      f"(bar {end_tick // (BEAT_TICKS * tl.beats_per_bar) + 1}); "
                                      f"move the 'end' marker or trim the region")
-    framed = [Event(loop_tick, ORDER_LOOP, bytes([EV_LOOP]))]
+    framed = [Event(loop_tick, ORDER_LOOP, bytes([EV_LOOP]))] if loop_tick > 0 else []
     framed += [Event(loop_tick, ORDER_LOOP, b) for b in restore]
     framed += events
+    if any(e.tick == loop_tick and e.order == ORDER_NOTE for e in events):
+        off_at_end = False
     if off_at_end:
         framed.append(Event(end_tick, ORDER_END, bytes([EV_OFF])))
     framed.append(Event(end_tick, ORDER_END + 1, bytes([EV_END])))
@@ -378,10 +388,9 @@ def convert_song(path: Path, ins: InstrumentSet) -> Song:
         restore = _state_at(info["changes"], loop_tick) if ch != "NOISE" else []
         streams.append(_frame(path, tl, ch, events, loop_tick, end_tick, restore, ch != "NOISE"))
 
-    tempo_events = [Event(t, ORDER_STATE, bytes([EV_TEMPO]) + tempo_rate(bpm).to_bytes(2, "little"))
-                    for t, bpm in tempos if t > 0]
+    tempo_events = [Event(t, ORDER_STATE, tempo_event(bpm)) for t, bpm in tempos if t > 0]
     at_loop = [bpm for t, bpm in tempos if t <= loop_tick][-1]
-    loop_tempo = [bytes([EV_TEMPO]) + tempo_rate(at_loop).to_bytes(2, "little")]
+    loop_tempo = [tempo_event(at_loop)] if tempos[-1][1] != at_loop else []
     streams.append(_frame(path, tl, "tempo", tempo_events, loop_tick, end_tick, loop_tempo, False))
 
     hits: list[int] = []
