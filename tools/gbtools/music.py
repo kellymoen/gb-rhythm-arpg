@@ -19,6 +19,7 @@ import mido
 
 from gbtools.assets import asset_name
 from gbtools.errors import ConvertError
+from gbtools.names import IDENT
 
 FPS = 4194304 / 70224  # Game Boy frame rate, ~59.7275 Hz
 BEAT_TICKS = 48
@@ -34,7 +35,6 @@ CC_VIBRATO, CC_DUTY = 1, 12
 CHANNELS = ["P1", "P2", "WAVE", "NOISE"]
 TRACK_NAMES = CHANNELS + ["HITS"]
 NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
-SONG_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Sort order of events that share a tick: state changes before notes, OFF before a new NOTE.
 ORDER_LOOP, ORDER_STATE, ORDER_OFF, ORDER_NOTE, ORDER_END = range(5)
@@ -338,7 +338,7 @@ def _frame(path, tl, name, events, loop_tick, end_tick, restore: list[bytes], of
 
 def convert_song(path: Path, ins: InstrumentSet) -> Song:
     name = asset_name(path)
-    if not SONG_NAME.match(name):
+    if not IDENT.match(name):
         raise ConvertError(path, f"song file name '{name}' must be lower_snake_case (it becomes a C name)")
     try:
         mid = mido.MidiFile(path)

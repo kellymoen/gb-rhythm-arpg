@@ -48,8 +48,8 @@ def field(
     for key, value in (("step", step), ("none", none)):
         if value is not None:
             out[key] = value
+    out["doc"] = doc
     for key, flag in (("absent", absent), ("array_length", array_length), ("restart", restart)):
         if flag:
             out[key] = True
-    out["doc"] = doc
     return out

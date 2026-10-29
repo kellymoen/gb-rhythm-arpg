@@ -20,8 +20,10 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from gbtools import labdesc
 from gbtools.assets import asset_name
 from gbtools.errors import ConvertError
+from gbtools.names import IDENT
 
 MAX_STEPS = 16
 WAVES_MAX = 4
@@ -32,7 +34,6 @@ KEEP = 0xFF
 
 CHANNELS = {"P1": 0, "P2": 1, "WAVE": 2, "NOISE": 3}
 PULSE = ("P1", "P2")
-NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 NOTE = re.compile(r"^([A-Ga-g])([#b]?)(-?\d)$")
 NOTE_INDEX = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
@@ -171,7 +172,7 @@ def _step_bytes(path: Path, channel: str, n: int, entry, first: bool, wave_count
 
 def load_effect(path: Path) -> Effect:
     name = asset_name(path)
-    if not NAME.match(name):
+    if not IDENT.match(name):
         raise ConvertError(path, f"effect file name '{name}' must be lower_snake_case (it becomes SFX_<NAME>)")
     try:
         doc = tomllib.loads(path.read_text())
@@ -329,12 +330,12 @@ def render_lab(effects: list[Effect]) -> str:
     fields = []
     for i, e in enumerate(effects):
         base = i * EFFECT_SIZE
-        fields.append({"source": e.source, "path": ["priority"], "offset": base + 1, "type": "u8",
-                       "default": e.priority, "min": 1, "max": 15,
-                       "doc": f"{e.name}: steals {e.channel} from equal or lower priority"})
-        fields.append({"source": e.source, "path": ["step"], "offset": base + 2, "type": "u8",
-                       "default": len(e.steps), "min": 1, "max": MAX_STEPS, "array_length": True,
-                       "doc": f"{e.name}: steps played (slots past the file's [[step]] tables are new steps)"})
+        fields.append(labdesc.field(["priority"], base + 1, "u8", e.priority,
+                                    f"{e.name}: steals {e.channel} from equal or lower priority",
+                                    min=1, max=15, source=e.source))
+        fields.append(labdesc.field(["step"], base + 2, "u8", len(e.steps),
+                                    f"{e.name}: steps played (slots past the file's [[step]] tables are new steps)",
+                                    min=1, max=MAX_STEPS, source=e.source, array_length=True))
         for n, (data, keys) in enumerate(zip(e.steps, e.keys)):
             trigger = data[1] != KEEP
             for key, off, typ, lo, hi, doc, extra in LAB_FIELDS[e.channel]:
@@ -347,12 +348,9 @@ def render_lab(effects: list[Effect]) -> str:
                     value = data[off] - 256 if data[off] > 127 else data[off]
                 else:
                     value = data[off]
-                f = {"source": e.source, "path": ["step", n, key], "offset": at, "type": typ,
-                     "default": value, "doc": doc}
-                if lo is not None:
-                    f["min"], f["max"] = lo, hi
-                f.update({k: v for k, v in extra.items() if k != "type"})
-                fields.append(f)
+                options = {k: v for k, v in extra.items() if k != "type"}
+                fields.append(labdesc.field(["step", n, key], at, typ, value, doc, min=lo, max=hi,
+                                            source=e.source, **options))
     return json.dumps({
         "source": "assets/sfx",
         "symbol": "_sfx_table",

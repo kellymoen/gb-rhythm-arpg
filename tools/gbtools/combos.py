@@ -12,18 +12,18 @@ defaults; release builds read the ROM table directly and `combos_reset()` is a n
 """
 
 import json
-import re
 import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from gbtools import labdesc
 from gbtools.errors import ConvertError
+from gbtools.names import IDENT
 
 MAX_STEPS = 8
 MAX_STRINGS = 8  # src/core/combo.c tracks candidate strings in one byte
 NONE = 0xFF
-IDENT = re.compile(r"^[a-z][a-z0-9_]*$")
 RESERVED = {"count"}
 
 END, REST = 0x00, 0x03
@@ -345,39 +345,32 @@ def _lab(c: Combos, source: str) -> dict:
     for i, s in enumerate(c.strings):
         base = i * STRING_SIZE
         for k in range(MAX_STEPS):
-            field = {"path": ["string", i, "steps", k], "offset": base + k, "type": "enum",
-                     "values": step_values, "default": s.tokens[k] if k < len(s.tokens) else "-",
-                     "doc": f"{s.name} step {k + 1}: A/B (f/b/s = held direction), '.' rest, '-' end"}
-            if k >= len(s.tokens):
-                field["absent"] = True
-            fields.append(field)
+            fields.append(labdesc.field(
+                ["string", i, "steps", k], base + k, "enum", s.tokens[k] if k < len(s.tokens) else "-",
+                f"{s.name} step {k + 1}: A/B (f/b/s = held direction), '.' rest, '-' end",
+                values=step_values, absent=k >= len(s.tokens)))
         for k in range(MAX_STEPS):
-            field = {"path": ["string", i, "attacks", k], "offset": base + MAX_STEPS + k, "type": "enum",
-                     "values": attack_values, "default": s.attack_names[k] if k < len(s.attack_names) else "",
-                     "doc": f"{s.name} step {k + 1}: attack ('' under rests)"}
-            if k >= len(s.attack_names):
-                field["absent"] = True
-            fields.append(field)
-        fields.append({"path": ["string", i, "unlock"], "offset": base + 2 * MAX_STEPS, "type": "u8",
-                       "default": s.unlock, "min": UNLOCK[0], "max": UNLOCK[1],
-                       "doc": f"{s.name}: progression level that unlocks it (not enforced yet)"})
+            fields.append(labdesc.field(
+                ["string", i, "attacks", k], base + MAX_STEPS + k, "enum",
+                s.attack_names[k] if k < len(s.attack_names) else "", f"{s.name} step {k + 1}: attack ('' under rests)",
+                values=attack_values, absent=k >= len(s.attack_names)))
+        fields.append(labdesc.field(
+            ["string", i, "unlock"], base + 2 * MAX_STEPS, "u8", s.unlock,
+            f"{s.name}: progression level that unlocks it (not enforced yet)", min=UNLOCK[0], max=UNLOCK[1]))
     base = len(c.strings) * STRING_SIZE
     for j, a in enumerate(c.attacks):
         at = base + j * ATTACK_SIZE
         fields += [
-            {"path": ["attack", j, "anim"], "offset": at, "type": "enum",
-             "values": {n: i for i, n in enumerate(c.anims)}, "default": c.anims[a.anim],
-             "doc": f"{a.name}: player animation"},
-            {"path": ["attack", j, "damage"], "offset": at + 1, "type": "u8", "default": a.damage,
-             "min": DAMAGE[0], "max": DAMAGE[1], "doc": f"{a.name}: damage (OFFBEAT >> offbeat_damage_shift)"},
-            {"path": ["attack", j, "lunge"], "offset": at + 2, "type": "u8", "default": a.lunge,
-             "min": LUNGE[0], "max": LUNGE[1], "doc": f"{a.name}: soft-lock lunge, px"},
-            {"path": ["attack", j, "sfx"], "offset": at + 3, "type": "enum",
-             "values": {"": NONE} | {n: i for i, n in enumerate(c.sfx)},
-             "default": c.sfx[a.sfx] if a.sfx != NONE else "", "doc": f"{a.name}: sound effect"},
+            labdesc.field(["attack", j, "anim"], at, "enum", c.anims[a.anim], f"{a.name}: player animation",
+                          values={n: i for i, n in enumerate(c.anims)}),
+            labdesc.field(["attack", j, "damage"], at + 1, "u8", a.damage,
+                          f"{a.name}: damage (OFFBEAT >> offbeat_damage_shift)", min=DAMAGE[0], max=DAMAGE[1]),
+            labdesc.field(["attack", j, "lunge"], at + 2, "u8", a.lunge, f"{a.name}: soft-lock lunge, px",
+                          min=LUNGE[0], max=LUNGE[1]),
+            labdesc.field(["attack", j, "sfx"], at + 3, "enum", c.sfx[a.sfx] if a.sfx != NONE else "",
+                          f"{a.name}: sound effect", values={"": NONE} | {n: i for i, n in enumerate(c.sfx)},
+                          absent=not a.sfx_given),
         ]
-        if not a.sfx_given:
-            fields[-1]["absent"] = True
     return {"source": source, "symbol": "_combos", "fields": fields}
 
 

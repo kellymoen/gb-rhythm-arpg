@@ -26,6 +26,7 @@ from PIL import Image
 
 from gbtools.assets import asset_name
 from gbtools.errors import ConvertError
+from gbtools.names import IDENT
 from gbtools.tiles import shades, tile_bytes
 
 REPO = Path(__file__).resolve().parents[2]
@@ -39,7 +40,6 @@ BANK_CAP = 15000  # bytes of estimated data per file; a ROM bank is 16384
 ANIM_NO_HIT = "ANIM_NO_HIT"
 
 TAG_RE = re.compile(r"^([a-z][a-z0-9]*)(?:_([a-z]+))?$")
-NAME_RE = re.compile(r"^[a-z][a-z0-9_]*$")
 
 # Actions the runtime looks up per sprite (enum order). `optional` ones may be absent entirely; their
 # anims are NULL. Sprites not listed here get exactly the actions their tags define.
@@ -217,7 +217,7 @@ def rel_box(b: Box, pivot: tuple[int, int], what: str, where: str, source: Path)
 def convert(png: Path, js: Path, budgets: dict[str, int], beat_ticks: int, name: str | None = None) -> Sprite:
     name = name or asset_name(Path(png.stem))
     source = Path(f"{png.stem}.aseprite")
-    if not NAME_RE.match(name):
+    if not IDENT.match(name):
         raise ConvertError(source, f"sprite name `{name}` must be lowercase letters, digits and underscores")
     try:
         doc = json.loads(js.read_text())
