@@ -88,6 +88,53 @@ combat-scene viewer's main loop ends at LY 80 (median), 139 at worst.
 The song-loop spike (106–112 lines in the ISR, measured before the converter fix above) no longer
 drops frames: the rhythm-test and combat scenes ran 1400 frames past the loop point with no misses.
 
+## M2 combat scene (2026-10-29)
+
+Measured in PyBoy on the placeholders-only CGB and DMG ROMs (identical numbers) over 1500 frames of
+random spam: A/B on a quarter of the frames, A+B, walking in 8 directions, the dummy striking every 4
+beats, past the tempo change and the song's loop. "Work" runs from the loop's start (after `vsync()`
+returns, i.e. after the VBlank ISR) to the start of tile streaming.
+
+| | Scanlines (median / p95 / max) |
+|-|-----------|
+| Loop start (where the VBlank ISR ends) | 16 / 43 / 70 |
+| Work, all frames | 69 / 95 / 117 |
+| Work ends at LY | 88 / 112 / 129 |
+| `vsync()` called at LY (streaming fills to 120, late OAM rewrite) | 98 / - / 140 |
+| Missed frames | 0 |
+
+| Frame type | Work median / max |
+|------------|-----------|
+| Attack or dodge start + a press fed to the matcher | 89 / 117 |
+| Attack or dodge start | 90 / 106 |
+| Hit frame (`combat_on_hit_frame`: hitbox test, hitstop, flash, counters) | 84 / 102 |
+| Press fed to the matcher | 80 / 101 |
+| Text job | 60 / 90 |
+| Nothing special (HUD, OAM, popups, possibly a new anim frame) | 54 / 88 |
+
+Fixed costs per frame: `fx_update` + clock ~7, `oam_begin`/2 draws/`oam_end` ~14, `hud_update` ~11
+(was ~21: two `__divuchar` calls, now gone), `combat_ui_update` ~1-2 (OAM touched only on change),
+DEBUG timing overlay up to ~11 after a press. The matcher's tick costs ~27 lines on a frame where it
+resolves a held-back press into events.
+
+A press's attack starts 2 frames after the press (the `dodge_grace` hold-back), never later in the
+scripted strings: scheduling added no delay. Its first frame shows 1-2 frames after that (streaming).
+
+**Scheduling policy** (`src/scenes/combatflat.c`): presses are graded in the ISR, so everything here
+only moves visuals. Each costly step starts only before its LY limit: another press to the matcher
+< 64, the matcher's tick < 80 (and never while presses are still queued), the player's attack/dodge
+start < 68 (first, before anims update; its anim then advances from the next frame with the ticks
+carried), a new anim frame shown < 60, one other anim start/turn < 64, a text job < 100 (only when
+nothing costly ran), the DEBUG overlay < 112, streaming until 120, a late OAM rewrite < 126. A loop
+starting at LY >= 36 leaves presses queued and does nothing costly; at >= 64 it only draws, and both
+characters' song ticks carry to the next frame (anims stay on the beat; a hit frame lands a frame
+late). The dummy's update is skipped (ticks carried, at most 24) when it would cost a call on a frame
+that already showed a new frame.
+
+Fixed on the way: the LYC=143 VBlank stream handler assumed whole tiles; after an HBlank copy stopped
+inside a tile it wrapped `units` and overwrote both characters' slots. It now finishes the partial
+tile first.
+
 ## Lessons
 
 - The first `hud_update` called `beat_ticks_until_slot` (16-bit multiply/divide) for each of 8 pips

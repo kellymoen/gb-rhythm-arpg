@@ -4,7 +4,9 @@ Colour mapping: an indexed PNG (Aseprite's Indexed mode; preferred) uses its pal
 (0 = lightest / sprite transparency, 3 = darkest). Any other PNG maps each colour to the nearest of
 four evenly spaced brightness levels; fully transparent pixels are 0.
 Tiles are read left-to-right, top-to-bottom. With --sprite8x16 each 8x16 block is emitted as its top
-then bottom tile, matching 8x16 sprite mode.
+then bottom tile, matching 8x16 sprite mode. With --banked the data goes to a switchable ROM bank
+(`#pragma bank 255`, BANKREF(<symbol>)), for sheets that are copied with a banked VRAM copy rather than
+read from bank 0.
 """
 
 import argparse
@@ -70,14 +72,19 @@ def convert(path: Path, sprite8x16: bool) -> list[bytes]:
     return tiles
 
 
-def render(symbol: str, tiles: list[bytes], source: str) -> tuple[str, str]:
+def render(symbol: str, tiles: list[bytes], source: str, banked: bool = False) -> tuple[str, str]:
     banner = f"/* Generated from {source} by tools/gbtools/tiles.py. Do not edit. */\n"
     guard = f"GEN_{symbol.upper()}_H"
-    header = (banner + f"#ifndef {guard}\n#define {guard}\n\n#include <stdint.h>\n\n"
+    includes = "#include <stdint.h>\n" + ("#include <gbdk/platform.h>\n" if banked else "")
+    bankref = f"BANKREF_EXTERN({symbol})\n" if banked else ""
+    header = (banner + f"#ifndef {guard}\n#define {guard}\n\n{includes}\n"
               + f"#define {symbol.upper()}_TILE_COUNT {len(tiles)}\n"
-              + f"extern const uint8_t {symbol}_tiles[];\n\n#endif\n")
+              + bankref + f"extern const uint8_t {symbol}_tiles[];\n\n#endif\n")
     rows = "".join("    " + ", ".join(f"0x{b:02X}" for b in t) + ",\n" for t in tiles)
-    source_c = banner + f'#include "{symbol}.h"\n\nconst uint8_t {symbol}_tiles[] = {{\n{rows}}};\n'
+    pragma = "#pragma bank 255\n\n" if banked else ""
+    ref = f"BANKREF({symbol})\n\n" if banked else ""
+    source_c = (banner + pragma + f'#include "{symbol}.h"\n\n' + ref
+                + f"const uint8_t {symbol}_tiles[] = {{\n{rows}}};\n")
     return header, source_c
 
 
@@ -87,13 +94,14 @@ def main(argv: list[str]) -> int:
     ap.add_argument("out_dir", type=Path)
     ap.add_argument("symbol")
     ap.add_argument("--sprite8x16", action="store_true")
+    ap.add_argument("--banked", action="store_true", help="put the tiles in a switchable ROM bank")
     args = ap.parse_args(argv)
     try:
         tiles = convert(args.png, args.sprite8x16)
     except ConvertError as e:
         print(e, file=sys.stderr)
         return 1
-    header, source_c = render(args.symbol, tiles, args.png.as_posix())
+    header, source_c = render(args.symbol, tiles, args.png.as_posix(), args.banked)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     (args.out_dir / f"{args.symbol}.h").write_text(header)
     (args.out_dir / f"{args.symbol}.c").write_text(source_c)

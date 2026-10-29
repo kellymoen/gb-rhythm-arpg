@@ -1,6 +1,6 @@
 """Generate placeholder assets that follow the asset contract (ADR 0006), for the author to replace.
 
-    python -m gbtools.placeholders [--force] {song,combat,sfx,font,hud,all}
+    python -m gbtools.placeholders [--force] {song,combat,sfx,font,hud,popups,floor,all}
 
 Every file is written as `<name>_genplaceholder.<ext>` (ADR 0007); the author replaces it by saving
 `<name>.<ext>` beside it. Never run by the build: it refuses to overwrite an existing placeholder
@@ -128,6 +128,71 @@ def hud(force: bool) -> None:
                 if d <= r:
                     spr.putpixel((x, y), 3 if d < r else 2)
     _write("assets/ui/hud_sprites.png", force, spr.save)
+
+
+# 3x5 capitals for the grade popups (only the letters they use).
+FONT_3X5 = {
+    "C": ["###", "#  ", "#  ", "#  ", "###"],
+    "D": ["## ", "# #", "# #", "# #", "## "],
+    "E": ["###", "#  ", "## ", "#  ", "###"],
+    "F": ["###", "#  ", "## ", "#  ", "#  "],
+    "G": [" ##", "#  ", "# #", "# #", " ##"],
+    "O": ["###", "# #", "# #", "# #", "###"],
+    "P": ["###", "# #", "###", "#  ", "#  "],
+    "R": ["## ", "# #", "## ", "# #", "# #"],
+    "T": ["###", " # ", " # ", " # ", " # "],
+}
+
+
+def _text3x5(img: Image.Image, x: int, y: int, text: str, shade: int) -> None:
+    for i, ch in enumerate(text):
+        for dy, line in enumerate(FONT_3X5[ch]):
+            for dx, c in enumerate(line):
+                if c == "#":
+                    img.putpixel((x + 4 * i + dx, y + dy), shade)
+
+
+def popups(force: bool) -> None:
+    """popups_sprites.png: 8x16 sprite sheet, 64x16, four 16x16 cells (contract with
+    src/scenes/combat_ui.c): PERFECT, GOOD, OFF (offbeat) grade popups, then the training dummy's
+    "!" telegraph (left 8x16) and its strike mark (right 8x16). Index 0 is transparent."""
+    img = _indexed(64, 16)
+    # PERFECT: light text on a dark box. GOOD: dark text on a light box. OFF: mid text, no box.
+    for y in range(1, 15):
+        for x in range(0, 16):
+            img.putpixel((x, y), 3)
+        for x in range(16, 32):
+            img.putpixel((x, y), 1)
+    _text3x5(img, 2, 2, "PER", 1)
+    _text3x5(img, 0, 8, "FECT", 1)
+    _text3x5(img, 16, 5, "GOOD", 3)
+    _text3x5(img, 34, 5, "OFF", 2)
+    # "!": a dark bar and dot with a light outline
+    for y in range(1, 15):
+        for x in range(50, 54):
+            img.putpixel((x, y), 1)
+    for y in range(2, 10):
+        img.putpixel((51, y), 3)
+        img.putpixel((52, y), 3)
+    for y in range(12, 14):
+        img.putpixel((51, y), 3)
+        img.putpixel((52, y), 3)
+    # strike mark: an 8-ray burst centred at (59, 7), dark rays with mid tips
+    for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (-1, -1), (1, -1), (-1, 1)):
+        for r in range(4):
+            img.putpixel((59 + dx * r, 7 + dy * r), 3 if r < 3 else 2)
+    _write("assets/ui/popups_sprites.png", force, img.save)
+
+
+def floor(force: bool) -> None:
+    """floor.png: background tiles, 32x16 = one 2:1 isometric floor diamond (light lines on shade 0),
+    tiled across the combat scene's floor (row-major: tiles 0-3 on top, 4-7 below)."""
+    img = _indexed(32, 16)
+    for x in range(32):
+        d = 8 - abs(x - 16) // 2
+        img.putpixel((x, 8 - d), 1)
+        img.putpixel((x, (8 + d) % 16), 1)
+    _write("assets/ui/floor.png", force, img.save)
 
 
 def song(force: bool) -> None:
@@ -484,9 +549,10 @@ def sfx(force: bool) -> None:
 def main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="python -m gbtools.placeholders")
     ap.add_argument("--force", action="store_true")
-    ap.add_argument("what", choices=["song", "combat", "sfx", "font", "hud", "all"])
+    ap.add_argument("what", choices=["song", "combat", "sfx", "font", "hud", "popups", "floor", "all"])
     args = ap.parse_args(argv)
-    for name, fn in (("song", song), ("combat", combat), ("sfx", sfx), ("font", font), ("hud", hud)):
+    for name, fn in (("song", song), ("combat", combat), ("sfx", sfx), ("font", font), ("hud", hud),
+                     ("popups", popups), ("floor", floor)):
         if args.what in (name, "all"):
             fn(args.force)
     return 0

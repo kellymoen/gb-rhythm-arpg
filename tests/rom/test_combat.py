@@ -1,0 +1,431 @@
+"""The M2 combat scene (src/scenes/combatflat.c + combat_*.c), headless in PyBoy.
+
+Presses are scripted against the ROM's own beat clock, as in test_calibrate.py: between frames the
+test reads _music_clock, works out the step slot and frame error a press made now would be judged
+with (beat_judge: 8th-note slots, no latency offset), and holds the button for exactly the frame that
+gives the error it wants. Every scripted press is checked against the ROM's own judgement.
+
+The scene's counters live in _combat_stats (src/scenes/combat.h, by byte offset below). Record goldens
+after an intended visual change with `UPDATE_GOLDEN=1 make test-rom`, then review them.
+"""
+
+import json
+import random
+import re
+import sys
+from pathlib import Path
+
+import pytest
+
+from conftest import REPO, ROMS, assert_golden, boot, enter_scene, symbols
+
+sys.path.insert(0, str(REPO / "tools"))
+from lab.replay import load_replay, run_replay  # noqa: E402
+from lab.symbols import load_symbols  # noqa: E402
+
+BEAT_TICKS = 48
+STEPS_PER_BEAT = 2
+SLOT_TICKS = BEAT_TICKS // STEPS_PER_BEAT
+SETTLE = 40  # frames for the scene to load and its first frames to stream
+REPLAYS = Path(__file__).parent / "replays"
+
+# combat_stats_t (src/scenes/combat.h): name -> (offset, size)
+STATS = {
+    "damage": (0, 2), "dummy_hits": (2, 2), "hits": (4, 1), "last_damage": (5, 1), "finished": (6, 1),
+    "finishes": (7, 1), "breaks": (8, 1), "steps": (9, 1), "dodges": (10, 1), "slowmos": (11, 1),
+    "strikes": (12, 1), "player_hurts": (13, 1), "strikes_dodged": (14, 1), "last_grade": (15, 1),
+    "last_attack": (16, 1), "attacks_started": (17, 1),
+}
+STRING = {"rush": 0, "pause": 1, "crush": 2, "crush_lunge": 3}  # COMBO_STRING_* (data/combos.toml)
+IDLE = 0xFF  # COMBO_IDLE
+GRADES = {"OFFBEAT": 0, "GOOD": 1, "PERFECT": 2}
+PLAYER_HURT_ACTION = 3  # SPRITE_PLAYER_HURT
+SPRITEANIM_ACTION = None  # offset of spriteanim_t.action, found from the DEBUG .cdb (see action_offset)
+
+
+def judge(beat: int, tick: int, frac: int, rate: int) -> tuple[int | None, int]:
+    """beat_judge (src/core/beat.c) at steps_per_beat 2, latency 0: (frames, slot)."""
+    if rate == 0:
+        return None, 0
+    slot = beat * STEPS_PER_BEAT + tick // SLOT_TICKS
+    pos = ((tick % SLOT_TICKS) << 8) + frac
+    half = SLOT_TICKS << 7
+    if pos <= half:
+        dist, late = pos, True
+    else:
+        dist, late, slot = (SLOT_TICKS << 8) - pos, False, slot + 1
+    frames = (dist + (rate >> 1)) // rate
+    return (frames if late else -frames), slot
+
+
+def tuning_offsets(variant: str) -> dict[str, int]:
+    header = (ROMS[variant].parent / "gen" / "tuning.h").read_text()
+    body = header[header.index("typedef struct {") : header.index("} tuning_t;")]
+    return {name: 2 * i for i, name in enumerate(re.findall(r"int16_t (\w+);", body))}
+
+
+def clock_step(beat: int, tick: int, frac: int, rate: int) -> tuple[int, int, int, int]:
+    """beat_clock_step (src/core/beat.c): one frame of the beat clock."""
+    sub = frac + rate
+    t = tick + (sub >> 8)
+    return beat + t // BEAT_TICKS, t % BEAT_TICKS, sub & 0xFF, rate
+
+
+class Driver:
+    """Runs a PyBoy one frame at a time with an explicit set of held buttons per frame, and times
+    presses from the beat clock. `on_frame(frame, held)` sees every frame's buttons (replay recording).
+
+    The VBlank ISR steps the clock (music_update) and then judges the frame's press (input_poll).
+    PyBoy's frame boundary falls at the end of VBlank, so the step normally lands before it and the
+    clock read between ticks is the one the next press meets. When the LYC=143 tile-stream interrupt
+    delays the ISR, the step can land after the boundary: a hook on beat_clock_step() remembers the
+    clock it started from (the clock may even be read half written), and the next press meets that
+    clock stepped once."""
+
+    def __init__(self, pb, syms: dict[str, int], tick=None, on_frame=None):
+        self.pb, self.syms = pb, syms
+        self.tick = tick or (lambda: pb.tick(1, True))
+        self.on_frame = on_frame
+        self.frame = 0
+        self.down: set[str] = set()
+        self.judged: list[tuple[int, int]] = []  # (frames, slot) the scripted presses expected
+        self.step_from = (-1, None)  # (tick index, clock) of the last beat_clock_step() start
+        a = syms["_beat_clock_step"]
+        pb.hook_register(a >> 16, a & 0xFFFF, lambda _: setattr(self, "step_from", (self.frame, self.clock())), None)
+
+    def step(self, held=(), n: int = 1) -> None:
+        held = set(held)
+        for _ in range(n):
+            for b in self.down - held:
+                self.pb.button_release(b)
+            for b in held - self.down:
+                self.pb.button_press(b)
+            self.down = set(held)
+            if self.on_frame:
+                self.on_frame(self.frame, frozenset(held))
+            self.tick()
+            self.frame += 1
+
+    def clock(self) -> tuple[int, int, int, int]:
+        m, a = self.pb.memory, self.syms["_music_clock"]
+        return m[a] | m[a + 1] << 8, m[a + 2], m[a + 3], m[a + 4] | m[a + 5] << 8
+
+    def press_clock(self) -> tuple[int, int, int, int]:
+        """The clock a press held during the next tick is judged at."""
+        frame, before = self.step_from
+        if frame == self.frame - 1:  # this VBlank's step started (it may be half written): its result
+            return clock_step(*before)
+        c = self.clock()
+        return clock_step(*c) if c[3] else c  # not started yet
+
+    def slot_now(self) -> int:
+        return judge(*self.press_clock())[1]
+
+    def tap(self, buttons, slot: int, error: int = 0, hold=(), max_frames: int = 400) -> None:
+        """Hold `buttons` (+ `hold`) for the one frame judged `error` frames from step slot `slot`."""
+        for _ in range(max_frames):
+            frames, s = judge(*self.press_clock())
+            if s == slot and frames == error:
+                self.judged.append((frames, slot))
+                self.step(set(buttons) | set(hold))
+                return
+            if s > slot or (s == slot and frames is not None and frames > error):
+                pytest.fail(f"missed slot {slot} at error {error}: now slot {s} error {frames}")
+            self.step(hold)
+        pytest.fail(f"slot {slot} never came")
+
+    def play(self, steps: list, first_slot: int, errors=None) -> None:
+        """One string: steps like ["a", "a", None, ("b", "right")], one per step slot from first_slot."""
+        for k, st in enumerate(steps):
+            if st is None:
+                continue
+            buttons = (st,) if isinstance(st, str) else st
+            self.tap(buttons, first_slot + k, errors[k] if errors else 0)
+
+
+class Combat(Driver):
+    """The combat scene, booted and entered, with stats and tuning access."""
+
+    def __init__(self, variant: str = "cgb", pokes: dict[str, int] | None = None):
+        pb = boot(variant)
+        super().__init__(pb, symbols(variant))
+        self.variant = variant
+        self.offsets = tuning_offsets(variant)
+        self.rom_judged: list[tuple[int, int]] = []
+        a = self.syms["_beat_judge"]
+        pb.hook_register(a >> 16, a & 0xFFFF, lambda _: self.rom_judged.append(judge(*self.clock())), None)
+        enter_scene(pb, "combat")
+        for name, value in (pokes or {}).items():
+            self.set_tuning(name, value)
+        self.step(n=SETTLE)
+
+    def set_tuning(self, name: str, value: int) -> None:
+        a = self.syms["_tuning"] + self.offsets[name]
+        self.pb.memory[a] = value & 0xFF
+        self.pb.memory[a + 1] = (value >> 8) & 0xFF
+
+    def stat(self, name: str) -> int:
+        off, size = STATS[name]
+        a = self.syms["_combat_stats"] + off
+        return self.pb.memory[a] | (self.pb.memory[a + 1] << 8 if size == 2 else 0)
+
+    def u8(self, sym: str, off: int = 0) -> int:
+        return self.pb.memory[self.syms[sym] + off]
+
+    def approach(self) -> None:
+        """Walk from the start to the dummy's left side, level with it, facing it (8 px up, then
+        right until its footprint stops the player)."""
+        self.step({"up"}, 8)
+        self.step({"right"}, 44)
+        self.step((), 4)
+
+    def check_judged(self) -> None:
+        """Every scripted press was judged by the ROM exactly as the script planned."""
+        assert self.rom_judged[-len(self.judged):] == self.judged, "a press landed off its target"
+
+    def stop(self) -> None:
+        self.pb.stop(save=False)
+
+
+def first_free_slot(d: Driver, ahead: int = 2) -> int:
+    return d.slot_now() + ahead
+
+
+# --- strings on the beat -------------------------------------------------------------------------
+
+STRINGS = {
+    # name: (steps, damage of each hit at PERFECT)
+    "rush": (["a", "a", "a", "a"], [2, 2, 2, 3]),
+    "pause": (["a", "a", None, "a"], [2, 2, 8]),
+    "crush": (["b", None, "b"], [4, 7]),
+    "crush_lunge": (["b", None, ("b", "right")], [4, 7]),
+}
+
+
+@pytest.mark.parametrize("name", list(STRINGS))
+def test_string_on_the_beat(name):
+    steps, damage = STRINGS[name]
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    c.play(steps, first_free_slot(c))
+    c.step(n=40)
+    c.check_judged()
+    assert c.stat("finished") == STRING[name], f"finished string {c.stat('finished')}"
+    assert c.stat("finishes") == 1 and c.stat("breaks") == 0
+    assert c.stat("dummy_hits") == len(damage), "not every hit connected"
+    assert c.stat("hits") == len(damage)
+    assert c.stat("damage") == sum(damage)
+    assert c.stat("last_grade") == GRADES["PERFECT"]
+    if name in ("rush", "crush_lunge"):
+        assert_golden(c.pb, f"combat_{name}_done")
+    c.stop()
+
+
+def test_hit_flash_hitstop_and_popup():
+    """The frame after a jab's hit frame: the dummy flashes (OBJ palette 1), a PERFECT popup floats
+    over the player, and the counters show the damage."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    c.tap(("a",), first_free_slot(c))
+    for _ in range(30):
+        c.step()
+        if c.stat("dummy_hits"):
+            break
+    c.step(n=2)
+    assert c.stat("dummy_hits") == 1
+    oam = [c.pb.memory[0xFE00 + 4 * i : 0xFE00 + 4 * i + 4] for i in range(16, 40)]
+    flashed = [o for o in oam if o[0] and 0xA8 <= o[2] < 0xB8 and o[3] & 0x11 == 0x11]
+    assert flashed, "dummy parts are not on the flash palette"
+    assert c.pb.memory[0xFE00 + 4 * 8] != 0, "no grade popup (OAM 8)"
+    assert_golden(c.pb, "combat_hit_flash")
+    c.stop()
+
+
+def test_offbeat_step_does_reduced_damage():
+    """Rush with its second hit 7 frames late (OFFBEAT at 120 BPM): it still advances the string and
+    finishes it, but deals 2 >> offbeat_damage_shift."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    c.play(["a", "a", "a", "a"], first_free_slot(c), errors=[0, 7, 0, 0])
+    c.step(n=40)
+    c.check_judged()
+    assert c.stat("finished") == STRING["rush"]
+    assert c.stat("dummy_hits") == 4
+    assert c.stat("damage") == 2 + (2 >> 1) + 2 + 3
+
+
+def test_string_breaks_after_grace():
+    """A A, then nothing: after string_grace (1) empty slot the string breaks; the next A starts a
+    new string."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.approach()
+    s = first_free_slot(c)
+    c.play(["a", "a"], s)
+    # Pause still wants an A at s+3 after its rest; with one grace slot the string waits for s+4
+    # and breaks once a press would be judged against s+5.
+    while c.slot_now() < s + 5:
+        c.step()
+    assert c.stat("breaks") == 0, "broke before its grace ran out"
+    c.step(n=3)
+    assert c.stat("breaks") == 1, "string did not break"
+    assert c.stat("finishes") == 0
+    c.step(n=4)
+    assert_golden(c.pb, "combat_break")
+    c.tap(("a",), c.slot_now() + 1)
+    c.step(n=12)
+    assert c.stat("hits") == 1, "the next press did not start a new string"
+    c.check_judged()
+    c.stop()
+
+
+# --- dodges and slow-mo ---------------------------------------------------------------------------
+
+def test_perfect_dodge_enters_slowmo():
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.tap(("a", "b"), first_free_slot(c), error=1)
+    c.step(n=6)
+    c.check_judged()
+    assert c.stat("dodges") == 1 and c.stat("slowmos") == 1
+    assert c.u8("_combat_slowmo") | c.u8("_combat_slowmo", 1) << 8, "not in slow-mo"
+    assert_golden(c.pb, "combat_slowmo")
+    # it lasts slowmo.beats (2) beats, then the background comes back
+    c.step(n=2 * 30 + 10)
+    assert c.u8("_combat_slowmo") == 0 and c.u8("_combat_slowmo", 1) == 0
+    c.stop()
+
+
+def test_late_dodge_does_not_enter_slowmo():
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    c.tap(("a", "b"), first_free_slot(c), error=5)  # GOOD
+    c.step(n=6)
+    c.check_judged()
+    assert c.stat("dodges") == 1 and c.stat("slowmos") == 0
+    assert c.u8("_combat_slowmo") == 0
+    c.stop()
+
+
+def test_slowmo_halves_the_dummys_anim_rate():
+    """During slow-mo the dummy's anim advances on every enemy_divider-th (2nd) frame only."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0})
+    pos = c.syms["_combat_dummy"]  # anim_t.pos follows ends[16] at the start of spriteanim_t.anim
+    c.tap(("a", "b"), first_free_slot(c), error=0)
+    c.step(n=4)
+    assert c.stat("slowmos") == 1
+    off = anim_pos_offset()
+    before = c.pb.memory[pos + off] | c.pb.memory[pos + off + 1] << 8
+    c.step(n=20)
+    after = c.pb.memory[pos + off] | c.pb.memory[pos + off + 1] << 8
+    ticks = 20 * 1.6  # 120 BPM: 1.6 song ticks per frame
+    assert abs((after - before) % 96 - ticks / 2) <= 3, f"dummy anim moved {after - before} ticks in 20 frames"
+    c.stop()
+
+
+def anim_pos_offset() -> int:
+    """Byte offset of spriteanim_t.anim.pos (src/gb/spriteanim.h, src/core/anim.h): 3 pointers, 4
+    bytes, then anim_t whose ends[16] (32 bytes) precede pos."""
+    return 2 + 2 + 2 + 1 + 1 + 1 + 1 + 32
+
+
+# --- the dummy's strike ---------------------------------------------------------------------------
+
+def strike_ready(pokes=None) -> Combat:
+    """Next to the dummy, then the dummy striking every 2 beats, one beat after its telegraph."""
+    c = Combat(pokes={"dummy_attack_every_beats": 0, **(pokes or {})})
+    c.approach()
+    c.set_tuning("dummy_attack_every_beats", 2)
+    c.set_tuning("dummy_telegraph_beats", 1)
+    return c
+
+
+def telegraph_shown(c: Combat) -> bool:
+    return c.pb.memory[0xFE00 + 4 * 10] != 0  # "!" on OAM 10
+
+
+def test_dummy_strike_hurts_an_idle_player_in_range():
+    c = strike_ready()
+    seen_telegraph = False
+    for _ in range(200):
+        c.step()
+        seen_telegraph |= telegraph_shown(c)
+        if c.stat("player_hurts"):
+            break
+    assert seen_telegraph, "no telegraph before the strike"
+    assert c.stat("strikes") == 1 and c.stat("player_hurts") == 1
+    c.step(n=3)
+    assert c.u8("_combat_player", action_offset()) == PLAYER_HURT_ACTION, "player not in the hurt anim"
+    assert_golden(c.pb, "combat_player_hurt")
+    c.stop()
+
+
+def test_dummy_strike_misses_a_player_out_of_range():
+    c = Combat(pokes={"dummy_attack_every_beats": 2, "dummy_telegraph_beats": 1})
+    for _ in range(150):  # from the start position the dummy is out of reach
+        c.step()
+    assert c.stat("strikes") >= 1 and c.stat("player_hurts") == 0
+    c.stop()
+
+
+@pytest.mark.parametrize("error", [-2, 3])
+def test_dodging_on_the_strike_beat_avoids_it(error):
+    """A dodge 2 frames early (dodging when the strike lands) or 3 frames late (inside the strike's
+    grace) avoids the strike; both are PERFECT, so slow-mo starts too."""
+    c = strike_ready()
+    while not telegraph_shown(c):
+        c.step()
+    beat = c.clock()[0]
+    c.tap(("a", "b"), (beat + 1) * STEPS_PER_BEAT, error)
+    c.step(n=20)
+    c.check_judged()
+    assert c.stat("strikes") == 1 and c.stat("strikes_dodged") == 1
+    assert c.stat("player_hurts") == 0
+    assert c.stat("slowmos") == 1
+    c.stop()
+
+
+def action_offset() -> int:
+    """Byte offset of spriteanim_t.action: after the init fields (sprite, anim_banks, anims: 3
+    pointers; action_count, bank, tile, slot_tiles) and anim_t (ends[16], pos, 8 bytes)."""
+    return 6 + 4 + 32 + 2 + 8
+
+
+# --- frame budget ---------------------------------------------------------------------------------
+
+@pytest.mark.parametrize("variant", ["cgb", "dmg", "mine"])
+def test_main_loop_never_misses_a_frame(variant):
+    """1500 frames of button spam (attacks, dodges, walking; the dummy striking every 4 beats) past
+    the song's tempo change (bar 5) and its loop point (~890 frames). The main loop must call
+    vsync() on every frame."""
+    c = Combat(variant, pokes={"dummy_attack_every_beats": 4})
+    reached = set()
+    c.pb.hook_register(0, c.syms["_vsync"], lambda _: reached.add(c.frame), None)
+    rng = random.Random(7)
+    start, held = c.frame, set()
+    for _ in range(1500):
+        p = rng.random()
+        press = {rng.choice(["a", "b"])} if p < 0.25 else {"a", "b"} if p < 0.28 else set()
+        if rng.random() < 0.05:
+            held = set(rng.sample(["up", "down", "left", "right"], rng.choice([0, 1, 1, 2])))
+            held -= {"up"} if "down" in held else set()
+            held -= {"left"} if "right" in held else set()
+        c.step(held | press)
+    stats = {k: c.stat(k) for k in ("steps", "dodges", "dummy_hits", "strikes")}
+    c.stop()
+    missed = [f for f in range(start + 2, c.frame) if f not in reached]
+    assert not missed, f"main loop overran a frame at frames {missed[:20]} ({len(missed)} in all)"
+    assert stats["steps"] > 50 and stats["dodges"] > 5 and stats["strikes"] >= 1, stats
+
+
+# --- replays (feel regressions) ---------------------------------------------------------------------
+
+@pytest.mark.parametrize("path", sorted(REPLAYS.glob("combat_*.json")), ids=lambda p: p.stem)
+def test_replay(path):
+    """Replays recorded on the placeholders-only DEBUG ROM (tests/rom/replays/generate.py): every press
+    is judged as recorded and the final screen (counters, string name, sprites) is identical."""
+    rom = ROMS["debug"]
+    result = run_replay(rom, load_replay(path), load_symbols(rom.with_suffix(".noi")))
+    assert result.ok, "\n".join(result.mismatches)
+
+
+def test_every_string_has_a_replay():
+    names = {json.loads(p.read_text())["notes"].split(":")[0] for p in REPLAYS.glob("combat_*.json")}
+    assert set(STRINGS) <= names, f"missing replays for {set(STRINGS) - names}"

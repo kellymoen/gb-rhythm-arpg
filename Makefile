@@ -103,10 +103,11 @@ $(OBJ)/gen/%.o: $(GEN)/%.c $(GEN_HDR)
 $(GEN)/%.c $(GEN)/%.h: data/%.toml tools/gbtools/%.py
 	$(PYTOOLS) gbtools.$* $< $(GEN)
 
-# assets/ui/foo.png -> ui_foo.{c,h}; files named *_sprites.png are 8x16 sprite sheets.
+# assets/ui/foo.png -> ui_foo.{c,h}; files named *_sprites.png are 8x16 sprite sheets. Names listed in
+# UI_BANKED (set in mk/*.mk) go to a switchable ROM bank.
 .SECONDEXPANSION:
 $(GEN)/ui_%.c $(GEN)/ui_%.h: $$(call asset_path,assets/ui,$$*,.png) tools/gbtools/tiles.py $(GEN)/assets.txt
-	$(PYTOOLS) gbtools.tiles $< $(GEN) ui_$* $(if $(findstring _sprites,$*),--sprite8x16)
+	$(PYTOOLS) gbtools.tiles $< $(GEN) ui_$* $(if $(findstring _sprites,$*),--sprite8x16) $(if $(filter $*,$(UI_BANKED)),--banked)
 
 $(GEN)/music.stamp: $(SONG_FILES) $(INSTRUMENTS) tools/gbtools/music.py $(GEN)/assets.txt
 	$(PYTOOLS) gbtools.music $(INSTRUMENTS) $(GEN) $(SONG_FILES)

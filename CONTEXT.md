@@ -33,7 +33,9 @@ Use these terms in code, comments, data files and docs. If a new concept appears
 - **Hitstop** — a short freeze on a hit, in song ticks. Beat-relative animations catch up afterwards
   so they stay on the beat.
 - **Hit flash** — the struck target flashing for `hit_flash_ticks`.
-- **Training dummy** — the stationary target of the M2 combat scene.
+- **Training dummy** — the stationary target of the M2 combat scene. It also telegraphs and strikes
+  on the beat (PROVISIONAL), so there is something to dodge.
+- **Grade popup** — the small PERFECT / GOOD / OFF word over the player for each press.
 - **Telegraph** — an enemy wind-up that starts on one beat and strikes on a later beat.
 - **Attack token** — permission to attack; only 1–2 enemies hold one at a time.
 - **Soft lock** — an attack turns toward the nearest enemy in the held direction (or the last

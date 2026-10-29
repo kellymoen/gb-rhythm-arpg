@@ -59,3 +59,11 @@ def test_errors(tmp_path):
     img.save(p)
     with pytest.raises(ConvertError, match="has 5 colours"):
         tiles.convert(p, sprite8x16=False)
+
+
+def test_banked_output_has_pragma_and_bankref():
+    header, source_c = tiles.render("ui_x", [bytes(16)], "assets/ui/x.png", banked=True)
+    assert "BANKREF_EXTERN(ui_x)" in header and "#include <gbdk/platform.h>" in header
+    assert source_c.index("#pragma bank 255") < source_c.index("BANKREF(ui_x)") < source_c.index("ui_x_tiles[]")
+    header, source_c = tiles.render("ui_x", [bytes(16)], "assets/ui/x.png")
+    assert "BANK" not in header + source_c and "pragma" not in source_c

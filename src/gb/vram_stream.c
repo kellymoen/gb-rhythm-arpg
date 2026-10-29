@@ -138,7 +138,8 @@ static void vs_copy(void) NONBANKED __naked
 }
 
 /* VBlank streaming. An LCD (LYC = 143) interrupt starts at the last visible line, waits for its
- * HBlank, then copies whole tiles of the first pending job without waiting (~93 M-cycles a tile)
+ * HBlank, finishes a tile the HBlank copy left half done (2-byte units), then copies whole tiles of
+ * the first pending job without waiting (~93 M-cycles a tile)
  * until LY 148, so the VBlank ISR that follows (from LY ~150) finishes the OAM DMA before line 0. The
  * VBlank ISR (music, input) runs that much later; nothing in it depends on its scanline. */
 #define VB_LYC 143
@@ -195,6 +196,25 @@ static void vb_handler(void) NONBANKED __naked
         ldh     a, (0x41)
         and     a, #2
         jr      nz, 1$
+        ld      a, b                    ; the HBlank copy may have stopped inside a tile:
+        and     a, #7                   ; finish that tile first (the tile loop below needs
+        jr      z, 2$                   ; whole, aligned tiles, or units wraps and it runs away)
+        ldh     a, (0x44)               ; LY
+        cp      a, #VB_LYC
+        jr      c, 3$                   ; wrapped to a new frame: stop
+        cp      a, #VB_LAST_LY
+        jr      nc, 3$
+5$:
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        ld      a, (hl+)
+        ld      (de), a
+        inc     de
+        dec     b
+        ld      a, b
+        and     a, #7
+        jr      nz, 5$
 2$:
         ld      a, b
         or      a, a
